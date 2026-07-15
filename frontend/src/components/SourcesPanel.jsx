@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { X, ExternalLink, FileText, CheckCircle, Search, Layers } from 'lucide-react';
+import { X, ExternalLink, FileText, CheckCircle, Search, Layers, Trash2 } from 'lucide-react';
 
-export default function SourcesPanel({ isOpen, onClose, papers, onSelectPaper, selectedPaperChunks, isLoadingChunks }) {
+export default function SourcesPanel({ isOpen, onClose, papers, onSelectPaper, selectedPaperChunks, isLoadingChunks, onClearPapers }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('papers');
 
@@ -19,13 +19,25 @@ export default function SourcesPanel({ isOpen, onClose, papers, onSelectPaper, s
         {/* Header */}
         <div className="panel-header">
           <div className="panel-header-left">
-            <Layers size={16} style={{ color: 'var(--purple)' }} />
+            <Layers size={14} style={{ color: 'var(--purple)' }} />
             <div>
-              <div className="panel-header-title">Sources &amp; RAG Index</div>
-              <div className="panel-header-sub">ChromaDB prose chunks (all-MiniLM-L6-v2)</div>
+              <div className="panel-header-title">Literature Index</div>
             </div>
           </div>
-          <button type="button" className="btn-icon" onClick={onClose}><X size={16} /></button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            {papers && papers.length > 0 && (
+              <button
+                type="button"
+                className="btn-icon"
+                title="Clear Index"
+                style={{ color: 'var(--rose)' }}
+                onClick={onClearPapers}
+              >
+                <Trash2 size={13} />
+              </button>
+            )}
+            <button type="button" className="btn-icon" onClick={onClose}><X size={14} /></button>
+          </div>
         </div>
 
         {/* Tabs */}
@@ -34,24 +46,24 @@ export default function SourcesPanel({ isOpen, onClose, papers, onSelectPaper, s
             type="button"
             className={`panel-tab ${activeTab === 'papers' ? 'active' : ''}`}
             onClick={() => setActiveTab('papers')}
-          >Papers ({papers?.length || 0})</button>
+          >Documents ({papers?.length || 0})</button>
           <button
             type="button"
             className={`panel-tab ${activeTab === 'chunks' ? 'active' : ''}`}
             onClick={() => setActiveTab('chunks')}
-          >Chunks ({selectedPaperChunks ? selectedPaperChunks.length : 0})</button>
+          >Passages ({selectedPaperChunks ? selectedPaperChunks.length : 0})</button>
         </div>
 
         {/* Search */}
         {activeTab === 'papers' && (
           <div className="panel-search">
             <div className="panel-search-wrap">
-              <Search size={13} className="panel-search-icon" />
+              <Search size={12} className="panel-search-icon" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Filter by title or ID..."
+                placeholder="Search index..."
                 className="panel-search-input"
               />
             </div>
@@ -63,9 +75,8 @@ export default function SourcesPanel({ isOpen, onClose, papers, onSelectPaper, s
           {activeTab === 'papers' && (
             filtered.length === 0 ? (
               <div className="panel-empty">
-                <FileText size={28} style={{ opacity: 0.3, marginBottom: 8 }} />
-                <div>No indexed papers yet.</div>
-                <p>When fetch_paper runs, PDFs are chunked and listed here.</p>
+                <FileText size={24} style={{ opacity: 0.3, marginBottom: 6 }} />
+                <div>Index is currently empty.</div>
               </div>
             ) : filtered.map((p) => (
               <div
@@ -75,8 +86,8 @@ export default function SourcesPanel({ isOpen, onClose, papers, onSelectPaper, s
               >
                 <div className="paper-card-top">
                   <div className="paper-title">{p.title || p.id}</div>
-                  <span className="badge badge-purple" style={{ fontSize: 9, fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
-                    {p.chunk_count || 0} Chunks
+                  <span className="badge badge-purple" style={{ fontSize: 9, flexShrink: 0 }}>
+                    {p.chunk_count || 0} pgs
                   </span>
                 </div>
                 <div className="paper-authors">
@@ -87,12 +98,12 @@ export default function SourcesPanel({ isOpen, onClose, papers, onSelectPaper, s
                   <div className="paper-links" onClick={(e) => e.stopPropagation()}>
                     {p.arxiv_id && (
                       <a href={`https://arxiv.org/abs/${p.arxiv_id}`} target="_blank" rel="noopener noreferrer">
-                        arXiv <ExternalLink size={10} style={{ display: 'inline' }} />
+                        Link <ExternalLink size={8} style={{ display: 'inline', marginLeft: 1 }} />
                       </a>
                     )}
                     {p.pdf_path && (
-                      <span style={{ color: 'var(--emerald)', display: 'flex', alignItems: 'center', gap: 3 }}>
-                        <CheckCircle size={11} /> Cached
+                      <span style={{ color: 'var(--emerald)', display: 'flex', alignItems: 'center', gap: 2 }}>
+                        <CheckCircle size={10} /> Indexed
                       </span>
                     )}
                   </div>
@@ -103,13 +114,13 @@ export default function SourcesPanel({ isOpen, onClose, papers, onSelectPaper, s
 
           {activeTab === 'chunks' && (
             isLoadingChunks ? (
-              <div className="panel-empty anim-pulse">Loading prose passages from ChromaDB...</div>
+              <div className="panel-empty anim-pulse">Retrieving passages...</div>
             ) : !selectedPaperChunks || selectedPaperChunks.length === 0 ? (
-              <div className="panel-empty">Select a paper from the Papers tab to inspect its chunks.</div>
+              <div className="panel-empty">Select a document to view indexed passages.</div>
             ) : selectedPaperChunks.map((c, i) => (
               <div key={i} className="chunk-card">
                 <div className="chunk-card-header">
-                  <span className="chunk-section">{c.metadata.section_guess || 'Body Text'}</span>
+                  <span className="chunk-section">{c.metadata.section_guess || 'Text Content'}</span>
                   <span className="chunk-page">Page {c.metadata.page_number || '?'}</span>
                 </div>
                 <div className="chunk-text">"{c.text}"</div>
@@ -118,7 +129,7 @@ export default function SourcesPanel({ isOpen, onClose, papers, onSelectPaper, s
           )}
         </div>
 
-        <div className="panel-footer">ChromaDB · all-MiniLM-L6-v2</div>
+        <div className="panel-footer">Local Semantic Database</div>
       </div>
     </>
   );

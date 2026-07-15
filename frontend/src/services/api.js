@@ -74,3 +74,16 @@ export async function streamQuery({ query, mode, onEvent, onError, onClose }) {
     if (onError) onError(err);
   }
 }
+
+export async function clearHistory() {
+  const resp = await fetch(`${API_BASE_URL}/queries/clear`, { method: "POST" });
+  if (!resp.ok) throw new Error("Failed to clear query history");
+  return resp.json();
+}
+
+export async function clearIndexedPapers() {
+  const resp = await fetch(`${API_BASE_URL}/papers/clear`, { method: "POST" });
+  if (!resp.ok) throw new Error("Failed to clear indexed papers");
+  return resp.json();
+}
+

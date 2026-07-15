@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Brain, Terminal, FileText, Check, Copy, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
 
 export default function StepCard({ step }) {
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const { type, content, tool_name, tool_args, step: stepNum } = step;
@@ -19,7 +19,7 @@ export default function StepCard({ step }) {
   if (type === 'error') {
     return (
       <div className="step-error anim-fade-in">
-        <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 2, color: 'var(--rose)' }} />
+        <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 2, color: 'var(--rose)' }} />
         <div>{content}</div>
       </div>
     );
@@ -31,10 +31,10 @@ export default function StepCard({ step }) {
         <div className="step-card-header">
           <div className="step-card-header-left">
             <span className="step-icon purple"><Brain size={12} /></span>
-            <span className="step-label purple">Thought {stepNum ? `#${stepNum}` : ''}</span>
+            <span className="step-label purple">Thought</span>
           </div>
           <button type="button" className="btn-icon" onClick={handleCopy} title="Copy thought">
-            {copied ? <Check size={14} style={{ color: 'var(--emerald)' }} /> : <Copy size={14} />}
+            {copied ? <Check size={12} style={{ color: 'var(--emerald)' }} /> : <Copy size={12} />}
           </button>
         </div>
         <div className="step-thought-text">{content}</div>
@@ -49,16 +49,16 @@ export default function StepCard({ step }) {
         <div className="step-card-header">
           <div className="step-card-header-left">
             <span className="step-icon blue"><Terminal size={12} /></span>
-            <span className="step-label blue">Action {stepNum ? `#${stepNum}` : ''}</span>
-            <span className="badge badge-blue mono" style={{ fontSize: 10, fontFamily: 'var(--font-mono)' }}>{tool_name}</span>
+            <span className="step-label blue">Search / Query</span>
+            <span className="badge badge-blue">{tool_name}</span>
           </div>
           <div className="step-card-actions">
             <button type="button" className="step-toggle" onClick={() => setIsExpanded(!isExpanded)}>
-              {isExpanded ? 'Collapse' : 'Expand'}
-              {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              {isExpanded ? 'Hide Details' : 'Show Details'}
+              {isExpanded ? <ChevronUp size={12} style={{ marginLeft: 2 }} /> : <ChevronDown size={12} style={{ marginLeft: 2 }} />}
             </button>
-            <button type="button" className="btn-icon" onClick={handleCopy} title="Copy args">
-              {copied ? <Check size={14} style={{ color: 'var(--emerald)' }} /> : <Copy size={14} />}
+            <button type="button" className="btn-icon" onClick={handleCopy} title="Copy details">
+              {copied ? <Check size={12} style={{ color: 'var(--emerald)' }} /> : <Copy size={12} />}
             </button>
           </div>
         </div>
@@ -73,16 +73,16 @@ export default function StepCard({ step }) {
         <div className="step-card-header">
           <div className="step-card-header-left">
             <span className="step-icon green"><FileText size={12} /></span>
-            <span className="step-label green">Observation {stepNum ? `#${stepNum}` : ''}</span>
-            {tool_name && <span className="step-via-tag">via {tool_name}</span>}
+            <span className="step-label green">Source Passage Retrieved</span>
+            {tool_name && <span className="step-via-tag">{tool_name}</span>}
           </div>
           <div className="step-card-actions">
             <button type="button" className="step-toggle" onClick={() => setIsExpanded(!isExpanded)}>
-              {isExpanded ? 'Collapse' : 'Expand'}
-              {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              {isExpanded ? 'Hide Passage' : 'View Passage'}
+              {isExpanded ? <ChevronUp size={12} style={{ marginLeft: 2 }} /> : <ChevronDown size={12} style={{ marginLeft: 2 }} />}
             </button>
-            <button type="button" className="btn-icon" onClick={handleCopy} title="Copy observation">
-              {copied ? <Check size={14} style={{ color: 'var(--emerald)' }} /> : <Copy size={14} />}
+            <button type="button" className="btn-icon" onClick={handleCopy} title="Copy passage">
+              {copied ? <Check size={12} style={{ color: 'var(--emerald)' }} /> : <Copy size={12} />}
             </button>
           </div>
         </div>

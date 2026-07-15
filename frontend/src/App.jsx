@@ -4,7 +4,15 @@ import QueryInput from './components/QueryInput';
 import TraceView from './components/TraceView';
 import SourcesPanel from './components/SourcesPanel';
 import HistoryModal from './components/HistoryModal';
-import { streamQuery, fetchPapers, fetchQueries, fetchQueryDetails, fetchPaperChunks } from './services/api';
+import { 
+  streamQuery, 
+  fetchPapers, 
+  fetchQueries, 
+  fetchQueryDetails, 
+  fetchPaperChunks,
+  clearHistory,
+  clearIndexedPapers
+} from './services/api';
 import { BookOpen, Sparkles } from 'lucide-react';
 
 export default function App() {
@@ -37,13 +45,13 @@ export default function App() {
   const handleSendQuery = async (queryText) => {
     if (isStreaming) return;
     setSteps([]); setFinalAnswer(null); setIsStreaming(true);
-    setStatusMessage(`Initiating ReAct agent in [${mode.toUpperCase()}] mode...`);
+    setStatusMessage('Initiating academic search agent...');
 
     await streamQuery({
       query: queryText,
       mode,
       onEvent: (evt) => {
-        if (evt.type === 'status') setStatusMessage(evt.content || 'Agent active...');
+        if (evt.type === 'status') setStatusMessage(evt.content || 'Active...');
         else if (['thought', 'action', 'observation', 'error'].includes(evt.type)) {
           setSteps((prev) => [...prev, evt]);
           if (evt.type === 'error') {
@@ -56,7 +64,7 @@ export default function App() {
         }
       },
       onError: (err) => {
-        setSteps((prev) => [...prev, { type: 'error', content: `Backend connection error (${err.message}). Is Flask running on port 5000?` }]);
+        setSteps((prev) => [...prev, { type: 'error', content: `API connection failed. Make sure the backend server is running.` }]);
         setIsStreaming(false);
       },
       onClose: () => { setIsStreaming(false); refreshPapers(); },
@@ -77,12 +85,35 @@ export default function App() {
 
   const handleSelectHistory = async (queryId) => {
     try {
-      setStatusMessage('Loading trajectory from SQLite...');
+      setStatusMessage('Loading query history...');
       const d = await fetchQueryDetails(queryId);
       setMode(d.mode || 'react');
       setSteps(d.steps || []);
       setFinalAnswer(d.final_answer || null);
     } catch (e) { console.warn(e); }
+  };
+
+  const handleClearHistory = async () => {
+    if (!window.confirm("Are you sure you want to clear all query history?")) return;
+    try {
+      await clearHistory();
+      setSteps([]);
+      setFinalAnswer(null);
+      await refreshHistory();
+    } catch (e) {
+      console.warn("Failed to clear history:", e);
+    }
+  };
+
+  const handleClearPapers = async () => {
+    if (!window.confirm("Are you sure you want to clear all indexed papers and vector storage?")) return;
+    try {
+      await clearIndexedPapers();
+      setSelectedPaperChunks(null);
+      await refreshPapers();
+    } catch (e) {
+      console.warn("Failed to clear index:", e);
+    }
   };
 
   return (
@@ -97,38 +128,34 @@ export default function App() {
       />
 
       <main className="app-main">
-        {/* Hero when idle */}
-        {steps.length === 0 && !finalAnswer && !isStreaming && (
-          <div className="hero">
-            <div className="hero-chip">
-              <Sparkles size={12} style={{ color: 'var(--purple)' }} />
-              <span>Full-Stack ReAct Research Engine</span>
+        <div className="container">
+          {/* Hero when idle */}
+          {steps.length === 0 && !finalAnswer && !isStreaming && (
+            <div className="hero">
+              <div className="hero-chip">
+                <Sparkles size={11} style={{ color: 'var(--purple)' }} />
+                <span>Academic Search Engine</span>
+              </div>
+              <h2>
+                Iterative Literature Search &amp;<br />
+                <span className="hero-accent">Grounded Reasoning</span>
+              </h2>
+              <p>
+                An assistant that queries literature database indices, parses target texts, and highlights qualitative claims with verifiable inline source citations.
+              </p>
             </div>
-            <h2>
-              Grounded Academic Reasoning<br />
-              <span className="hero-accent">over Full-Text Literature</span>
-            </h2>
-            <p>
-              Interleaves internal <strong>Thought</strong> with external <strong>Actions</strong> (search_arxiv, fetch_paper, retrieve_context, calculate) to eliminate hallucinations and output verifiable (paper_id, page X) prose citations.
-            </p>
-            <div className="hero-tags">
-              <span className="hero-tag">Flask + SSE</span>
-              <span className="hero-tag">ChromaDB (all-MiniLM-L6-v2)</span>
-              <span className="hero-tag">SQLite (react_research.db)</span>
-              <span className="hero-tag">pdfplumber + fitz</span>
-            </div>
-          </div>
-        )}
+          )}
 
-        <TraceView
-          steps={steps}
-          finalAnswer={finalAnswer}
-          isStreaming={isStreaming}
-          statusMessage={statusMessage}
-          onSelectPaper={handleSelectPaper}
-        />
+          <TraceView
+            steps={steps}
+            finalAnswer={finalAnswer}
+            isStreaming={isStreaming}
+            statusMessage={statusMessage}
+            onSelectPaper={handleSelectPaper}
+          />
 
-        <QueryInput onSendQuery={handleSendQuery} isStreaming={isStreaming} mode={mode} />
+          <QueryInput onSendQuery={handleSendQuery} isStreaming={isStreaming} mode={mode} />
+        </div>
       </main>
 
       <SourcesPanel
@@ -138,6 +165,7 @@ export default function App() {
         onSelectPaper={handleSelectPaper}
         selectedPaperChunks={selectedPaperChunks}
         isLoadingChunks={isLoadingChunks}
+        onClearPapers={handleClearPapers}
       />
 
       <HistoryModal
@@ -146,15 +174,16 @@ export default function App() {
         queries={queries}
         onSelectHistoryQuery={handleSelectHistory}
         isLoading={isLoadingHistory}
+        onClearHistory={handleClearHistory}
       />
 
       <footer className="app-footer">
         <div className="app-footer-inner">
           <div className="app-footer-left">
-            <BookOpen size={13} style={{ color: 'var(--purple)' }} />
-            <span>Yao et al., ICLR 2023 (2210.03629)</span>
+            <BookOpen size={12} style={{ color: 'var(--purple)' }} />
+            <span>Interactive Academic Literature Research</span>
           </div>
-          <span>React 18 + Vite · Flask REST + SSE</span>
+          <span>Local Indexing Database</span>
         </div>
       </footer>
     </div>

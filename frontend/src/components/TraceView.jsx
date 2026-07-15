@@ -18,21 +18,21 @@ export default function TraceView({ steps, finalAnswer, isStreaming, statusMessa
     <div className="trace-section">
       <div className="trace-header">
         <div className="trace-header-left">
-          <Activity size={16} style={{ color: 'var(--purple)' }} />
-          <span className="trace-title">Reasoning &amp; Acting Trajectory</span>
+          <Activity size={14} style={{ color: 'var(--purple)' }} />
+          <span className="trace-title">Reasoning &amp; Search History</span>
           {isStreaming && (
             <span className="trace-live-badge">
               <Loader2 size={10} className="anim-spin" />
-              Live
+              Active
             </span>
           )}
         </div>
-        <span className="trace-count">{steps.length} {steps.length === 1 ? 'Step' : 'Steps'}</span>
+        <span className="trace-count">{steps.length} {steps.length === 1 ? 'Entry' : 'Entries'}</span>
       </div>
 
       {statusMessage && isStreaming && (
         <div className="trace-status anim-fade-in">
-          <Sparkles size={14} className="anim-bounce" style={{ color: 'var(--purple)' }} />
+          <Sparkles size={12} className="anim-bounce" style={{ color: 'var(--purple)', marginRight: 2 }} />
           <span>{statusMessage}</span>
         </div>
       )}

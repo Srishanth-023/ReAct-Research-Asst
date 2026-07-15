@@ -26,10 +26,10 @@ export default function FinalAnswer({ answer, onSelectPaper }) {
           type="button"
           onClick={() => onSelectPaper && onSelectPaper(paperId)}
           className="citation-pill"
-          title={`Inspect paper '${paperId}' in Sources panel`}
+          title={`Inspect paper '${paperId}' page ${pageNum}`}
         >
           <span>{paperId} (p.{pageNum})</span>
-          <ExternalLink size={10} />
+          <ExternalLink size={8} />
         </button>
       );
       lastIdx = regex.lastIndex;
@@ -42,7 +42,7 @@ export default function FinalAnswer({ answer, onSelectPaper }) {
     return text.split('\n').map((line, i) => {
       if (line.startsWith('### ')) return (
         <h3 key={i} className="answer-body">
-          <Award size={14} style={{ color: 'var(--purple)', flexShrink: 0 }} />
+          <Award size={12} style={{ color: 'var(--purple)', flexShrink: 0 }} />
           {line.replace('### ', '')}
         </h3>
       );
@@ -59,14 +59,14 @@ export default function FinalAnswer({ answer, onSelectPaper }) {
     <div className="answer-card">
       <div className="answer-header">
         <div className="answer-header-left">
-          <div className="answer-icon"><Sparkles size={14} /></div>
+          <div className="answer-icon"><Sparkles size={13} /></div>
           <div>
-            <div className="answer-title">Synthesized Final Answer &amp; Citations</div>
-            <div className="answer-subtitle">Verified &amp; Grounded over Full-Text Scientific Prose</div>
+            <div className="answer-title">Synthesized Answer &amp; Citations</div>
+            <div className="answer-subtitle">Grounded in literature index</div>
           </div>
         </div>
         <button type="button" className="btn btn-ghost" onClick={handleCopy}>
-          {copied ? <><Check size={14} style={{ color: 'var(--emerald)' }} /> Copied</> : <><Copy size={14} /> Copy</>}
+          {copied ? <><Check size={12} style={{ color: 'var(--emerald)' }} /> Copied</> : <><Copy size={12} /> Copy</>}
         </button>
       </div>
       <div className="answer-body">{renderAnswer(answer)}</div>

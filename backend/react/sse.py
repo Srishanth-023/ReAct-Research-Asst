@@ -88,3 +88,36 @@ def get_paper_chunks(paper_id: str):
         return jsonify({"paper_id": paper_id, "chunks": items})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@sse_bp.route("/api/queries/clear", methods=["POST"])
+def clear_queries():
+    """Clear all historical query trajectories and citations from SQLite."""
+    try:
+        with get_session() as session:
+            session.query(Citation).delete()
+            session.query(TrajectoryStep).delete()
+            session.query(Query).delete()
+            session.commit()
+        return jsonify({"status": "success", "message": "Query history cleared successfully."})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@sse_bp.route("/api/papers/clear", methods=["POST"])
+def clear_papers():
+    """Clear all indexed papers from SQLite and delete ChromaDB collection chunks."""
+    try:
+        collection = get_or_create_collection("research_papers")
+        try:
+            chunks = collection.get()
+            if chunks and chunks.get("ids"):
+                collection.delete(ids=chunks["ids"])
+        except Exception:
+            pass
+            
+        with get_session() as session:
+            session.query(Paper).delete()
+            session.commit()
+        return jsonify({"status": "success", "message": "Indexed papers database cleared."})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+

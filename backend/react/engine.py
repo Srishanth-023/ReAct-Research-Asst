@@ -54,7 +54,7 @@ def extract_and_record_citations(query_id: int, final_answer: str, session):
         session.add(citation)
 
 
-def resolve_model_name(client, model_param, is_anthropic=False):
+def resolve_model_name(client, model_param, is_anthropic=False, is_fallback=False):
     """
     If the model name is 'auto' or empty, query the models endpoint to select the first active model.
     """
@@ -66,13 +66,16 @@ def resolve_model_name(client, model_param, is_anthropic=False):
             model_ids = [m.id for m in models_data.data]
             if model_ids:
                 # Prioritize high-performance or common agent models if found in IDs
-                for preferred in ["gpt-4o", "grok", "deepseek", "llama", "mistral"]:
+                for preferred in ["gpt-4o", "grok", "deepseek", "llama", "mistral", "qwen"]:
                     matching = [mid for mid in model_ids if preferred in mid.lower()]
                     if matching:
                         return matching[0]
                 return model_ids[0]
         except Exception:
             pass
+        # Fallback defaults based on whether it is local (Ollama) or remote
+        if is_fallback or (client.base_url and "11434" in str(client.base_url)):
+            return "llama3.1"
         return "gpt-4o"  # Ultimate default
     return model_param
 
@@ -106,7 +109,7 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
             if not target_key or "api_key" in target_key:
                 raise ValueError("Anthropic API key is not configured.")
             cl = anthropic.Anthropic(api_key=target_key)
-            actual_model = resolve_model_name(cl, target_model, is_anthropic=True)
+            actual_model = resolve_model_name(cl, target_model, is_anthropic=True, is_fallback=is_fallback)
             return cl, actual_model, True
         else:
             if not is_fallback and (not target_key or "api_key" in target_key):
@@ -114,7 +117,7 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
             # OpenAI-compatible client wrapper
             url = target_url.strip() if target_url else None
             cl = openai.OpenAI(api_key=target_key or "free-fallback", base_url=url)
-            actual_model = resolve_model_name(cl, target_model, is_anthropic=False)
+            actual_model = resolve_model_name(cl, target_model, is_anthropic=False, is_fallback=is_fallback)
             return cl, actual_model, False
 
     # Set up initial client
