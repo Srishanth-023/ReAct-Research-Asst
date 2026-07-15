@@ -46,7 +46,10 @@ export default function App() {
         if (evt.type === 'status') setStatusMessage(evt.content || 'Agent active...');
         else if (['thought', 'action', 'observation', 'error'].includes(evt.type)) {
           setSteps((prev) => [...prev, evt]);
-          if (evt.type === 'error') setStatusMessage('Error encountered.');
+          if (evt.type === 'error') {
+            setStatusMessage('Error encountered.');
+            setIsStreaming(false);
+          }
         } else if (evt.type === 'answer') {
           setFinalAnswer(evt.content);
           setStatusMessage('Completed.');
