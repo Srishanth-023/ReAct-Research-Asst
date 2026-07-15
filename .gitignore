@@ -1,0 +1,38 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Runtime databases and RAG data
+backend/data/
+*.db
+*.sqlite
+
+# Secret files
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+
+# Dependency directories
+node_modules/
+backend/venv/
+backend/env/
+frontend/node_modules/
+
+# Build outputs
+frontend/dist/
+frontend/dist-ssr/
+build/
+dist/
+
+# IDEs and editors
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
