@@ -24,7 +24,7 @@ def fetch_paper_tool(paper_id: str, pdf_url: str = None, title: str = None) -> s
         else:
             # Check Semantic Scholar
             s2_meta = search_semantic_scholar_api(paper_id, max_results=1)
-            if s2_meta and s2_meta[0]["id"] != "error":
+            if s2_meta and s2_meta[0]["id"] not in ["error", "rate_limited"]:
                 p = s2_meta[0]
                 title = title or p.get("title")
                 pdf_url = pdf_url or p.get("pdf_url")

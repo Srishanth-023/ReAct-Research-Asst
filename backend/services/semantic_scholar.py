@@ -23,13 +23,16 @@ def search_semantic_scholar_api(query: str, max_results: int = 5) -> list[dict]:
             # Rate limit hit on free tier
             return [{
                 "id": "rate_limited",
+                "s2_id": "N/A",
+                "arxiv_id": None,
                 "title": "API Rate Limit Notice",
                 "abstract": "Semantic Scholar API rate limit exceeded on public free tier. Please retry shortly or use `search_arxiv` as fallback.",
                 "year": None,
                 "authors": [],
                 "pdf_url": None,
                 "is_downloadable": False,
-                "status_msg": "Rate limited (HTTP 429)"
+                "download_status_message": "Rate limited (HTTP 429)",
+                "source": "Semantic Scholar"
             }]
             
         response.raise_for_status()
@@ -87,11 +90,14 @@ def search_semantic_scholar_api(query: str, max_results: int = 5) -> list[dict]:
         print(f"[SemanticScholarClient] Error querying API for '{query}': {e}")
         return [{
             "id": "error",
+            "s2_id": "N/A",
+            "arxiv_id": None,
             "title": "Search Error",
             "abstract": f"Error querying Semantic Scholar API: {str(e)}. Please try search_arxiv.",
             "year": None,
             "authors": [],
             "pdf_url": None,
             "is_downloadable": False,
-            "status_msg": f"Error: {e}"
+            "download_status_message": f"Error: {e}",
+            "source": "Semantic Scholar"
         }]

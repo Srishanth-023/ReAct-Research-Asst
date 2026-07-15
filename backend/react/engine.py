@@ -54,6 +54,66 @@ def extract_and_record_citations(query_id: int, final_answer: str, session):
         session.add(citation)
 
 
+def parse_text_action(text: str):
+    """
+    Fallback parser to extract action names and arguments from the model's text response
+    when it doesn't use the API's native tool calling framework.
+    Supports standard Action format, markdown code blocks, and raw JSON dict formats.
+    """
+    # 1. First, check for standard ReAct Action patterns: e.g., Action: search_arxiv({"query": "..."})
+    pattern = re.compile(
+        r'Action\s*\d*\s*:\s*`?([a-zA-Z0-9_-]+)`?\s*(?:\((.*?)\)|(\{.*?\}))',
+        re.IGNORECASE | re.DOTALL
+    )
+    match = pattern.search(text)
+    if match:
+        tool_name = match.group(1).strip()
+        args_str = match.group(2) or match.group(3)
+        args_str = args_str.strip()
+        try:
+            tool_args = json.loads(args_str)
+        except Exception:
+            try:
+                clean_args = args_str.replace("'", '"')
+                tool_args = json.loads(clean_args)
+            except Exception:
+                tool_args = {"query": args_str}
+        return tool_name, tool_args
+
+    # 2. Next, check for JSON/Python block matching tool call structure:
+    # e.g., {"name": "search_arxiv", "parameters": {"query": "..."}} or {"name": "...", "arguments": ...}
+    # Using a brace-counting algorithm to safely extract dictionaries including nested ones
+    for i in range(len(text)):
+        if text[i] == '{':
+            brace_count = 1
+            for j in range(i + 1, len(text)):
+                if text[j] == '{':
+                    brace_count += 1
+                elif text[j] == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        candidate = text[i:j+1]
+                        try:
+                            # Clean up single quotes
+                            candidate_clean = candidate.replace("'", '"')
+                            data = json.loads(candidate_clean)
+                            if isinstance(data, dict) and "name" in data:
+                                name = data["name"]
+                                args = data.get("parameters") or data.get("arguments") or data.get("args") or {}
+                                if isinstance(args, dict):
+                                    return name, args
+                                elif isinstance(args, str):
+                                    try:
+                                        return name, json.loads(args)
+                                    except Exception:
+                                        return name, {"query": args}
+                        except Exception:
+                            pass
+                        break
+                        
+    return None, None
+
+
 def resolve_model_name(client, model_param, is_anthropic=False, is_fallback=False):
     """
     If the model name is 'auto' or empty, query the models endpoint to select the first active model.
@@ -372,16 +432,71 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
 
         # Check for termination
         if (not is_anthropic and not tool_calls) or (is_anthropic and not tool_use_blocks):
-            final_ans = thought_text.strip() or "No tools invoked or text generated."
-            with get_session() as session:
-                step_rec = TrajectoryStep(query_id=query_id, step_number=step_num, step_type="answer", content=final_ans)
-                session.add(step_rec)
-                q = session.query(Query).filter_by(id=query_id).first()
-                if q:
-                    q.final_answer = final_ans
-                extract_and_record_citations(query_id, final_ans, session)
-            yield {"type": "answer", "content": final_ans, "step": step_num}
-            return
+            fallback_tool_name, fallback_tool_args = parse_text_action(thought_text)
+            if fallback_tool_name:
+                args_json_str = json.dumps(fallback_tool_args, sort_keys=True)
+                current_signature = (fallback_tool_name, args_json_str)
+
+                # Repetition Guard
+                if current_signature == last_tool_signature:
+                    obs_result = (
+                        f"Observation Repetition Guard: You just executed tool `{fallback_tool_name}` with identical arguments "
+                        f"in your previous step and received the exact same observation. To prevent reasoning loops, "
+                        f"you MUST NOT repeat this exact call. Please try a different query or fetch a new paper."
+                    )
+                else:
+                    last_tool_signature = current_signature
+                    obs_result = execute_tool(fallback_tool_name, fallback_tool_args)
+
+                if fallback_tool_name == "finish":
+                    finished_answer = obs_result
+
+                # Record Action step
+                with get_session() as session:
+                    step_act = TrajectoryStep(query_id=query_id, step_number=step_num, step_type="action", tool_name=fallback_tool_name, tool_args=args_json_str)
+                    session.add(step_act)
+                yield {"type": "action", "tool_name": fallback_tool_name, "tool_args": fallback_tool_args, "step": step_num}
+                step_num += 1
+
+                # Record Observation step
+                if fallback_tool_name != "finish":
+                    with get_session() as session:
+                        step_obs = TrajectoryStep(query_id=query_id, step_number=step_num, step_type="observation", content=obs_result, tool_name=fallback_tool_name)
+                        session.add(step_obs)
+                    yield {"type": "observation", "content": obs_result, "tool_name": fallback_tool_name, "step": step_num}
+                    step_num += 1
+
+                    # Append tool result (OpenAI / Anthropic format)
+                    if not is_anthropic:
+                        openai_messages.append({"role": "assistant", "content": thought_text})
+                        openai_messages.append({"role": "user", "content": f"Observation: {obs_result}"})
+                    else:
+                        anthropic_messages.append({"role": "assistant", "content": thought_text})
+                        anthropic_messages.append({"role": "user", "content": f"Observation: {obs_result}"})
+
+                if finished_answer is not None:
+                    with get_session() as session:
+                        step_ans = TrajectoryStep(query_id=query_id, step_number=step_num, step_type="answer", content=finished_answer)
+                        session.add(step_ans)
+                        q = session.query(Query).filter_by(id=query_id).first()
+                        if q:
+                            q.final_answer = finished_answer
+                        extract_and_record_citations(query_id, finished_answer, session)
+                    yield {"type": "answer", "content": finished_answer, "step": step_num}
+                    return
+
+                continue
+            else:
+                final_ans = thought_text.strip() or "No tools invoked or text generated."
+                with get_session() as session:
+                    step_rec = TrajectoryStep(query_id=query_id, step_number=step_num, step_type="answer", content=final_ans)
+                    session.add(step_rec)
+                    q = session.query(Query).filter_by(id=query_id).first()
+                    if q:
+                        q.final_answer = final_ans
+                    extract_and_record_citations(query_id, final_ans, session)
+                yield {"type": "answer", "content": final_ans, "step": step_num}
+                return
 
         # Execute tools
         finished_answer = None
