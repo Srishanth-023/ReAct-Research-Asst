@@ -1,7 +1,7 @@
 import os
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
-from config import PORT
+from config import PORT, PDF_STORAGE_DIR
 from database.db import init_sqlite_db
 from database.vector_store import get_or_create_collection
 from react.sse import sse_bp
@@ -29,6 +29,10 @@ def create_app():
             "service": "ReAct Automated Academic Research Assistant API",
             "version": "1.0.0"
         })
+
+    @app.route("/api/papers/pdf/<path:filename>", methods=["GET"])
+    def get_pdf(filename):
+        return send_from_directory(PDF_STORAGE_DIR, filename)
 
     return app
 

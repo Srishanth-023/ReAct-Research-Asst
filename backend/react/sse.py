@@ -1,9 +1,18 @@
 import json
+import logging
 from flask import Blueprint, request, Response, jsonify
-from react.engine import run_agent_trace
+from react.engine import run_agent_trace, format_api_error
 from database.db import get_session
 from database.vector_store import get_or_create_collection
 from models.schema import Query, TrajectoryStep, Paper, Citation
+
+logger = logging.getLogger("SSE")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
 sse_bp = Blueprint("sse_bp", __name__)
 
@@ -22,13 +31,17 @@ def stream_query():
 
     def event_generator():
         try:
+            logger.info(f"[SSE STREAM] Starting trace for query: '{user_query}' in mode [{mode.upper()}]")
             # Yield initial status event
             yield f"data: {json.dumps({'type': 'status', 'content': f'Agent started in [{mode.upper()}] ablation mode...'})}\n\n"
             
             for event in run_agent_trace(user_query=user_query, mode=mode):
                 yield f"data: {json.dumps(event)}\n\n"
+            logger.info(f"[SSE STREAM] Completed trace successfully for query: '{user_query}'")
         except Exception as e:
-            err_payload = {"type": "error", "content": f"Internal Server Error during ReAct execution: {str(e)}"}
+            clean_err = format_api_error(e)
+            logger.error(f"[SSE STREAM ERROR] Error during ReAct trace for query '{user_query}': {clean_err}", exc_info=True)
+            err_payload = {"type": "error", "content": f"Execution Error: {clean_err}"}
             yield f"data: {json.dumps(err_payload)}\n\n"
 
     return Response(event_generator(), mimetype="text/event-stream", headers={

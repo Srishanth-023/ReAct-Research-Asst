@@ -1,5 +1,6 @@
 import json
 import re
+import logging
 from datetime import datetime, timezone
 import openai
 import anthropic
@@ -16,6 +17,73 @@ from database.db import get_session
 from models.schema import Query, TrajectoryStep, Citation, Paper
 from tools.registry import TOOL_DEFINITIONS, execute_tool
 from react.prompts import get_system_prompt_for_mode
+
+logger = logging.getLogger("ReActEngine")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
+
+def format_api_error(err: Exception) -> str:
+    """
+    Convert raw technical API error objects/dictionaries (e.g., Error code: 429 - {'error': ...})
+    into clean, user-friendly, human-understandable messages.
+    """
+    err_str = str(err)
+    
+    status_code = None
+    code_match = re.search(r'Error code:\s*(\d+)', err_str, re.IGNORECASE)
+    if code_match:
+        status_code = int(code_match.group(1))
+    elif hasattr(err, 'status_code') and err.status_code:
+        status_code = err.status_code
+        
+    msg_clean = None
+    msg_match = re.search(r"['\"]message['\"]\s*:\s*['\"]([^'\"]+)['\"]", err_str)
+    if msg_match:
+        msg_clean = msg_match.group(1)
+    elif hasattr(err, 'message') and err.message:
+        msg_clean = str(err.message)
+    elif hasattr(err, 'body') and isinstance(err.body, dict):
+        err_obj = err.body.get('error', {})
+        if isinstance(err_obj, dict) and 'message' in err_obj:
+            msg_clean = str(err_obj['message'])
+        elif isinstance(err_obj, str):
+            msg_clean = err_obj
+            
+    if status_code or msg_clean:
+        if status_code == 429 or (msg_clean and ("quota" in msg_clean.lower() or "rate limit" in msg_clean.lower() or "exceeded" in msg_clean.lower() or "billing" in msg_clean.lower())):
+            header = "API Quota / Rate Limit Exceeded (HTTP 429)"
+            detail = msg_clean if msg_clean else "You have exceeded your current quota or rate limit on the LLM API provider. Please check your billing details or API credits."
+            return f"{header}: {detail}"
+        elif status_code == 401 or (msg_clean and ("incorrect api key" in msg_clean.lower() or "unauthorized" in msg_clean.lower() or "invalid api key" in msg_clean.lower() or "authentication" in msg_clean.lower())):
+            header = "Authentication Failed (HTTP 401 - Invalid API Key)"
+            detail = msg_clean if msg_clean else "The API key provided in .env is incorrect, expired, or unauthorized for this provider endpoint."
+            return f"{header}: {detail}"
+        elif status_code == 404 or (msg_clean and ("model not found" in msg_clean.lower() or "does not exist" in msg_clean.lower() or "no such model" in msg_clean.lower())):
+            header = "Model or Endpoint Not Found (HTTP 404)"
+            detail = msg_clean if msg_clean else "The requested model or base URL endpoint could not be found on the API provider."
+            return f"{header}: {detail}"
+        elif status_code == 403:
+            header = "Access Forbidden (HTTP 403)"
+            detail = msg_clean if msg_clean else "Your API key does not have permission to access the requested model or API resource."
+            return f"{header}: {detail}"
+        elif status_code in (500, 502, 503, 504):
+            header = f"API Provider Server Error (HTTP {status_code})"
+            detail = msg_clean if msg_clean else "The LLM API provider is currently experiencing server issues or downtime."
+            return f"{header}: {detail}"
+        elif msg_clean:
+            prefix = f"API Error (HTTP {status_code})" if status_code else "API Error"
+            return f"{prefix}: {msg_clean}"
+
+    if "ConnectionRefusedError" in err_str or "Failed to establish a new connection" in err_str or "ConnectTimeout" in err_str or "Connection error" in err_str:
+        return "Connection Error: Could not connect to the LLM API endpoint. If using a local service (Ollama/LM Studio), please ensure it is running and accessible."
+        
+    return f"API Communication Error: {err_str}"
+
 
 
 def extract_and_record_citations(query_id: int, final_answer: str, session):
@@ -129,14 +197,29 @@ def resolve_model_name(client, model_param, is_anthropic=False, is_fallback=Fals
                 for preferred in ["gpt-4o", "grok", "deepseek", "llama", "mistral", "qwen"]:
                     matching = [mid for mid in model_ids if preferred in mid.lower()]
                     if matching:
+                        logger.info(f"[Model Resolution] Auto-detected preferred model '{matching[0]}' from API provider.")
                         return matching[0]
+                logger.info(f"[Model Resolution] Auto-detected model '{model_ids[0]}' from API provider.")
                 return model_ids[0]
-        except Exception:
-            pass
-        # Fallback defaults based on whether it is local (Ollama) or remote
-        if is_fallback or (client.base_url and "11434" in str(client.base_url)):
-            return "llama3.1"
-        return "gpt-4o"  # Ultimate default
+        except Exception as e:
+            if not is_fallback:
+                clean_err = format_api_error(e)
+                logger.error(f"[Model Resolution Error] Failed to query /models list from endpoint '{client.base_url}': {clean_err}")
+                logger.debug("[Model Resolution Traceback]", exc_info=True)
+                # If /models query failed because of an API error (401 invalid key, 429 quota, connection refused, 403), raise it!
+                if hasattr(e, 'status_code') or "Error code:" in str(e) or "Connection" in str(e):
+                    raise e
+            # Fallback defaults based on whether it is local (Ollama) or custom remote
+            if is_fallback or (client.base_url and "11434" in str(client.base_url)):
+                return "llama3.1"
+            if client.base_url and "api.openai.com" not in str(client.base_url):
+                url_lower = str(client.base_url).lower()
+                if "deepseek" in url_lower:
+                    return "deepseek-chat"
+                elif "x.ai" in url_lower:
+                    return "grok-beta"
+                return "default-model"
+            return "gpt-4o"  # Ultimate default only for standard OpenAI
     return model_param
 
 
@@ -172,7 +255,7 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
             actual_model = resolve_model_name(cl, target_model, is_anthropic=True, is_fallback=is_fallback)
             return cl, actual_model, True
         else:
-            if not is_fallback and (not target_key or "api_key" in target_key):
+            if not is_fallback and (not target_key or "api_key" in target_key or target_key == "free-fallback"):
                 raise ValueError("API key is not configured.")
             # OpenAI-compatible client wrapper
             url = target_url.strip() if target_url else None
@@ -187,28 +270,37 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
     is_using_fallback = False
 
     try:
+        logger.info(f"[API Setup] Initializing primary API connection (URL: '{BASE_URL or 'https://api.openai.com/v1'}', Model requested: '{MODEL_NAME}')")
         client, model_name, is_anthropic = build_client(API_KEY, BASE_URL, MODEL_NAME)
+        logger.info(f"[API Setup] Connected to primary API endpoint (`{BASE_URL or 'OpenAI Default'}`). Active Model: '{model_name}'")
         yield {
             "type": "status",
-            "content": f"Connected to primary API endpoint. Model resolved to: {model_name}"
+            "content": f"Connected to primary API endpoint (`{BASE_URL or 'OpenAI Default'}`). Active Model: `{model_name}`"
         }
     except Exception as e:
-        # Primary provider setup failed. Fallback immediately to local fallback.
+        clean_err = format_api_error(e)
+        logger.error(f"[PRIMARY API ERROR] Failed during primary API setup/communication: {clean_err}")
+        logger.debug("[PRIMARY API ERROR Traceback]", exc_info=True)
+        
+        logger.info(f"[API Fallback] Primary API ({BASE_URL or 'Default'}) encountered an issue: '{clean_err}'. Automatically switching to local Ollama (`{FALLBACK_BASE_URL}`)...")
         yield {
             "type": "status",
-            "content": f"Primary API setup failed: {e}. Falling back to local endpoint ({FALLBACK_BASE_URL})..."
+            "content": f"Primary API error (`{clean_err}`). Automatically switching to local Ollama fallback (`{FALLBACK_BASE_URL}`)..."
         }
         is_using_fallback = True
         try:
             client, model_name, is_anthropic = build_client("", FALLBACK_BASE_URL, FALLBACK_MODEL_NAME, is_fallback=True)
+            logger.info(f"[API Fallback] Connected to local Ollama endpoint (`{FALLBACK_BASE_URL}`). Active Model: '{model_name}'")
             yield {
                 "type": "status",
-                "content": f"Connected to local fallback. Model resolved to: {model_name}"
+                "content": f"Connected to local Ollama (`{FALLBACK_BASE_URL}`). Active Model: `{model_name}`"
             }
         except Exception as fallback_err:
+            clean_fallback_err = format_api_error(fallback_err)
+            logger.error(f"[FALLBACK SETUP ERROR] Could not initialize local Ollama fallback: {clean_fallback_err}", exc_info=True)
             yield {
                 "type": "error",
-                "content": f"Primary setup failed, and fallback initialization failed: {fallback_err}"
+                "content": f"API Connection Failed: Primary API error (`{clean_err}`) and local Ollama server (`{FALLBACK_BASE_URL}`) is unreachable or returned (`{clean_fallback_err}`). Please verify your API key/billing or ensure Ollama is running (`ollama serve`)."
             }
             return
 
@@ -246,10 +338,13 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
             yield {"type": "answer", "content": answer_text, "step": step_num}
             return
         except Exception as e:
+            clean_err = format_api_error(e)
+            logger.error(f"[API ERROR - Standard Mode] API call failed on endpoint '{BASE_URL or 'OpenAI Default'}' (Model: '{model_name}'): {clean_err}")
+            logger.debug("[API ERROR - Standard Mode Traceback]", exc_info=True)
             if not is_using_fallback:
                 yield {
                     "type": "status",
-                    "content": f"Primary API call failed: {e}. Retrying zero-shot query via local fallback..."
+                    "content": f"Primary API error (`{clean_err}`). Automatically switching to local Ollama fallback (`{FALLBACK_BASE_URL}`)..."
                 }
                 is_using_fallback = True
                 try:
@@ -272,10 +367,12 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                     yield {"type": "answer", "content": answer_text, "step": step_num}
                     return
                 except Exception as fallback_err:
-                    yield {"type": "error", "content": f"Primary API failed, and local fallback failed: {fallback_err}"}
+                    clean_fallback = format_api_error(fallback_err)
+                    logger.error(f"[FALLBACK ERROR - Standard Mode] {clean_fallback}", exc_info=True)
+                    yield {"type": "error", "content": f"Primary API failed (`{clean_err}`) and local Ollama server (`{FALLBACK_BASE_URL}`) is unreachable (`{clean_fallback}`). Please verify your API credentials/billing or ensure Ollama is running (`ollama serve`)."}
                     return
             else:
-                yield {"type": "error", "content": f"API Error: {e}"}
+                yield {"type": "error", "content": f"API Error (`{BASE_URL or 'OpenAI Default'}` - `{model_name}`): {clean_err}", "step": step_num}
                 return
 
     # ── 2. Run CoT Mode (Reasoning Only) ──
@@ -300,10 +397,13 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                 )
                 full_text = response.content[0].text if response.content else ""
         except Exception as e:
+            clean_err = format_api_error(e)
+            logger.error(f"[API ERROR - CoT Mode] API call failed on endpoint '{BASE_URL or 'OpenAI Default'}' (Model: '{model_name}'): {clean_err}")
+            logger.debug("[API ERROR - CoT Mode Traceback]", exc_info=True)
             if not is_using_fallback:
                 yield {
                     "type": "status",
-                    "content": f"Primary API call failed: {e}. Retrying CoT query via local fallback..."
+                    "content": f"Primary API error (`{clean_err}`). Automatically switching to local Ollama fallback (`{FALLBACK_BASE_URL}`)..."
                 }
                 is_using_fallback = True
                 try:
@@ -318,10 +418,12 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                     )
                     full_text = response.choices[0].message.content or ""
                 except Exception as fallback_err:
-                    yield {"type": "error", "content": f"Primary API failed, and local fallback failed: {fallback_err}"}
+                    clean_fallback = format_api_error(fallback_err)
+                    logger.error(f"[FALLBACK ERROR - CoT Mode] {clean_fallback}", exc_info=True)
+                    yield {"type": "error", "content": f"Primary API failed (`{clean_err}`) and local Ollama server (`{FALLBACK_BASE_URL}`) is unreachable (`{clean_fallback}`). Please verify your API credentials/billing or ensure Ollama is running (`ollama serve`)."}
                     return
             else:
-                yield {"type": "error", "content": f"API Error: {e}"}
+                yield {"type": "error", "content": f"API Error (`{BASE_URL or 'OpenAI Default'}` - `{model_name}`): {clean_err}", "step": step_num}
                 return
 
         parts = full_text.split("\n\nFinal Answer:") if "\n\nFinal Answer:" in full_text else full_text.split("### Final Answer")
@@ -379,16 +481,22 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                     messages=anthropic_messages
                 )
         except Exception as e:
+            clean_err = format_api_error(e)
+            logger.error(f"[API ERROR - ReAct Step {step_num}] API call failed on endpoint '{BASE_URL or 'OpenAI Default'}' (Model: '{model_name}'): {clean_err}")
+            logger.debug(f"[API ERROR - ReAct Step {step_num} Traceback]", exc_info=True)
+            
             if not is_using_fallback:
                 yield {
                     "type": "status",
-                    "content": f"Primary API failed: {e}. Continuing loop via local fallback endpoint..."
+                    "content": f"Primary API error (`{clean_err}`). Automatically switching to local Ollama fallback (`{FALLBACK_BASE_URL}`)..."
                 }
                 is_using_fallback = True
                 try:
                     client, model_name, is_anthropic = build_client("", FALLBACK_BASE_URL, FALLBACK_MODEL_NAME, is_fallback=True)
                 except Exception as fallback_err:
-                    yield {"type": "error", "content": f"Local fallback setup failed: {fallback_err}"}
+                    clean_fallback = format_api_error(fallback_err)
+                    logger.error(f"[FALLBACK SETUP ERROR - ReAct Step {step_num}] {clean_fallback}", exc_info=True)
+                    yield {"type": "error", "content": f"Primary API failed (`{clean_err}`) and local Ollama server (`{FALLBACK_BASE_URL}`) is unreachable (`{clean_fallback}`). Please verify your API credentials/billing or ensure Ollama is running (`ollama serve`)."}
                     return
                 if not openai_messages or len(openai_messages) <= 2:
                     openai_messages = [
@@ -397,7 +505,7 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                     ]
                 continue
             else:
-                err_msg = f"API Error at step {step_num}: {e}"
+                err_msg = f"API Error (`{BASE_URL or 'OpenAI Default'}` - `{model_name}`): {clean_err}"
                 with get_session() as session:
                     step = TrajectoryStep(query_id=query_id, step_number=step_num, step_type="error", content=err_msg)
                     session.add(step)

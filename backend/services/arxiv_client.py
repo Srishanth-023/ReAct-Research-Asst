@@ -27,7 +27,12 @@ def search_arxiv_api(query: str, max_results: int = 5) -> list[dict]:
     _rate_limit_wait()
 
     encoded_query = urllib.parse.quote(query)
-    url = f"http://export.arxiv.org/api/query?search_query=all:{encoded_query}&start=0&max_results={max_results}"
+    
+    if query.startswith("id:"):
+        arxiv_id = query[3:]
+        url = f"http://export.arxiv.org/api/query?id_list={arxiv_id}&start=0&max_results={max_results}"
+    else:
+        url = f"http://export.arxiv.org/api/query?search_query=all:{encoded_query}&start=0&max_results={max_results}"
 
     try:
         headers = {"User-Agent": "AcademicResearchAssistant/1.0 (Python/requests)"}

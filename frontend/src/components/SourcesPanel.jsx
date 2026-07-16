@@ -104,6 +104,9 @@ export default function SourcesPanel({ isOpen, onClose, papers, onSelectPaper, s
                     {p.pdf_path && (
                       <span style={{ color: 'var(--emerald)', display: 'flex', alignItems: 'center', gap: 2 }}>
                         <CheckCircle size={10} /> Indexed
+                        <a href={`http://localhost:8000/api/papers/pdf/${p.pdf_path.split(/[\\\\/]/).pop()}`} target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: '8px', color: 'var(--purple)', textDecoration: 'none' }}>
+                          PDF <ExternalLink size={8} />
+                        </a>
                       </span>
                     )}
                   </div>
