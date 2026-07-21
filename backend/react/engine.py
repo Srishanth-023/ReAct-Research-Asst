@@ -461,6 +461,10 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
     # ── 1. Run Standard Mode (Zero-shot) ──
     if mode_clean == "standard":
         try:
+            yield {
+                "type": "status",
+                "content": "Model is generating a direct response..."
+            }
             if not is_anthropic:
                 response = client.chat.completions.create(
                     model=model_name,
@@ -503,6 +507,7 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                     response = client.chat.completions.create(
                         model=model_name,
                         max_tokens=2048,
+                        extra_body={"options": {"num_ctx": 4096}},
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_query}
@@ -529,6 +534,10 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
     # ── 2. Run CoT Mode (Reasoning Only) ──
     elif mode_clean == "cot":
         try:
+            yield {
+                "type": "status",
+                "content": "Model is reasoning step-by-step (this may take a moment)..."
+            }
             if not is_anthropic:
                 response = client.chat.completions.create(
                     model=model_name,
@@ -559,9 +568,14 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                 is_using_fallback = True
                 try:
                     client, model_name, is_anthropic = build_client("", FALLBACK_BASE_URL, FALLBACK_MODEL_NAME, is_fallback=True)
+                    yield {
+                        "type": "status",
+                        "content": "Model is reasoning step-by-step (this may take 30-90s on local hardware)..."
+                    }
                     response = client.chat.completions.create(
                         model=model_name,
                         max_tokens=3000,
+                        extra_body={"options": {"num_ctx": 4096}},
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_query}
@@ -612,9 +626,14 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
 
     while step_num <= MAX_STEPS:
         finished_answer = None
+        
+        status_msg = f"Step {step_num}: Model is thinking and reasoning..."
+        if mode_clean == "act" and is_using_fallback:
+            status_msg = f"Step {step_num}: Model is deciding next action (local generation may take 30-60s)..."
+            
         yield {
             "type": "status",
-            "content": f"Step {step_num}: Model is thinking and reasoning..."
+            "content": status_msg
         }
         try:
             if not is_anthropic:
