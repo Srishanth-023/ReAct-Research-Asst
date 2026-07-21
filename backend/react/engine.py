@@ -180,6 +180,31 @@ def parse_text_action(text: str):
                             pass
                         break
                         
+    # 3. Third, check for loose action formats like: Action 4: search_arxiv(...) or just search_arxiv(...)
+    loose_pattern = re.compile(
+        r'(?:Action\s*\d*\s*:?\s*)?`?([a-zA-Z0-9_-]+)`?\s*\(\s*(?:\{.*?\}|.*?)\s*\)',
+        re.IGNORECASE | re.DOTALL
+    )
+    for match in loose_pattern.finditer(text):
+        tool_name = match.group(1).strip()
+        if tool_name in [t["function"]["name"] for t in TOOL_DEFINITIONS]:
+            # Try to extract the JSON argument from within the parentheses
+            arg_match = re.search(r'\(\s*(\{.*?\})\s*\)', match.group(0), re.DOTALL)
+            if arg_match:
+                try:
+                    args_clean = arg_match.group(1).replace("'", '"')
+                    tool_args = json.loads(args_clean)
+                    return tool_name, tool_args
+                except:
+                    pass
+            
+            # If JSON extraction fails, try to extract simple string args: e.g. (query="...") or ("...")
+            str_arg_match = re.search(r'\(\s*(?:[a-zA-Z0-9_-]+\s*=\s*)?[\'"](.*?)[\'"]\s*\)', match.group(0), re.DOTALL)
+            if str_arg_match:
+                val = str_arg_match.group(1)
+                # Just map it to common keys since we don't know the exact schema key
+                return tool_name, {"query": val, "paper_id": val, "expression": val}
+
     return None, None
 
 
@@ -570,6 +595,7 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
     anthropic_messages = [{"role": "user", "content": user_query}]
 
     while step_num <= MAX_STEPS:
+        finished_answer = None
         yield {
             "type": "status",
             "content": f"Step {step_num}: Model is thinking and reasoning..."
@@ -775,6 +801,31 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
 
                 continue
             else:
+                if tool_call_count < MIN_TOOL_CALLS_BEFORE_FINISH:
+                    logger.info(f"[Premature Finish Guard] Agent stopped without invoking a tool after {tool_call_count} calls. Redirecting.")
+                    if is_using_fallback:
+                        redirect_msg = (
+                            f"You stopped without outputting a valid Action. You have only executed {tool_call_count} tool calls so far. "
+                            f"You must continue researching using tools like search_arxiv or search_semantic_scholar. "
+                            'Please output your next action using the exact format: \'Action: tool_name {"arg": "val"}\'.'
+                        )
+                    else:
+                        redirect_msg = (
+                            f"You stopped without invoking a tool. You have only executed {tool_call_count} tool calls so far. "
+                            f"You must continue researching. Please invoke a tool using the native tool calling schema."
+                        )
+                        
+                    if not is_anthropic:
+                        openai_messages.append({"role": "assistant", "content": thought_text})
+                        openai_messages.append({"role": "user", "content": f"Observation: {redirect_msg}"})
+                    else:
+                        anthropic_messages.append({"role": "assistant", "content": thought_text})
+                        anthropic_messages.append({"role": "user", "content": f"Observation: {redirect_msg}"})
+                        
+                    yield {"type": "observation", "content": redirect_msg, "tool_name": "system_guard", "step": step_num}
+                    step_num += 1
+                    continue
+                
                 final_ans = thought_text.strip() or "No tools invoked or text generated."
                 with get_session() as session:
                     step_rec = TrajectoryStep(query_id=query_id, step_number=step_num, step_type="answer", content=final_ans)
@@ -787,7 +838,6 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                 return
 
         # Execute tools
-        finished_answer = None
 
         if not is_anthropic:
             openai_messages.append(assistant_msg.model_dump())

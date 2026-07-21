@@ -94,7 +94,6 @@ export default function App() {
         }
       },
       onError: (err) => {
-        setSteps((prev) => [...prev, { type: 'error', content: `API connection failed. Make sure the backend server is running.` }]);
         setIsStreaming(false);
       },
       onClose: () => { setIsStreaming(false); refreshPapers(); },
