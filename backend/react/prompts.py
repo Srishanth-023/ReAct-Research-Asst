@@ -77,7 +77,10 @@ Provide your step-by-step reasoning first, and then clearly output the final syn
 ACT_SYSTEM_PROMPT = """You are an Academic Research Assistant running in **Act-only Ablation Mode** (based on Yao et al., ICLR 2023 ablation experiments).
 In this mode, you MUST execute actions (`search_arxiv`, `fetch_paper`, `retrieve_context`, `calculate`) directly to gather facts, but you MUST NOT output any intermediate reasoning `Thought` scratchpad text.
 Directly invoke actions based on observations until you are ready to call `finish(answer)`.
-This demonstrates how purely acting without reasoning (`Thought` traces) makes complex synthesis and multi-step tracking challenging."""
+This demonstrates how purely acting without reasoning (`Thought` traces) makes complex synthesis and multi-step tracking challenging.
+
+**FAST Research Workflow**:
+- Limit yourself to a maximum of 2-4 tool calls before calling `finish`. Do not get stuck in endless search loops."""
 
 STANDARD_SYSTEM_PROMPT = """You are an Academic Research Assistant running in **Standard Zero-Shot Mode** (based on Yao et al., ICLR 2023 ablation experiments).
 In this mode, you MUST NOT use any tools, nor write any step-by-step Chain-of-Thought reasoning traces.
@@ -86,9 +89,9 @@ Simply answer the user's research query directly and concisely based on your pre
 def get_system_prompt_for_mode(mode: str) -> str:
     """Return appropriate system prompt depending on ablation mode."""
     m = mode.lower().strip()
-    if m == "cot":
+    if m in ("cot", "cot-only"):
         return COT_SYSTEM_PROMPT
-    elif m == "act":
+    elif m in ("act", "act-only"):
         return ACT_SYSTEM_PROMPT
     elif m == "standard":
         return STANDARD_SYSTEM_PROMPT

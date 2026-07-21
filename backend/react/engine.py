@@ -141,10 +141,14 @@ def parse_text_action(text: str):
         args_str = args_str.strip()
         try:
             tool_args = json.loads(args_str)
+            if isinstance(tool_args, str):
+                tool_args = {"query": tool_args}
         except Exception:
             try:
                 clean_args = args_str.replace("'", '"')
                 tool_args = json.loads(clean_args)
+                if isinstance(tool_args, str):
+                    tool_args = {"query": tool_args}
             except Exception:
                 tool_args = {"query": args_str}
         return tool_name, tool_args
@@ -447,6 +451,13 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
     tool_call_count = 0          # Track total tool executions for premature-finish guard
     collected_observations = []  # Collect observations for super summary generation
 
+    # Normalize mode string
+    mode_clean = mode.lower().strip()
+    if mode_clean in ("cot-only", "cot"):
+        mode_clean = "cot"
+    elif mode_clean in ("act-only", "act"):
+        mode_clean = "act"
+
     # ── 1. Run Standard Mode (Zero-shot) ──
     if mode_clean == "standard":
         try:
@@ -566,12 +577,17 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                 yield {"type": "error", "content": f"API Error (`{BASE_URL or 'OpenAI Default'}` - `{model_name}`): {clean_err}", "step": step_num}
                 return
 
-        parts = full_text.split("\n\nFinal Answer:") if "\n\nFinal Answer:" in full_text else full_text.split("### Final Answer")
-        if len(parts) > 1:
-            thought_text = parts[0].strip()
-            answer_text = parts[-1].strip()
-        else:
+        # Robustly split thoughts from the answer for CoT mode
+        lines = full_text.split('\n')
+        thought_lines = [line for line in lines if line.strip().lower().startswith('thought:')]
+        answer_lines = [line for line in lines if not line.strip().lower().startswith('thought:')]
+        
+        thought_text = '\n'.join(thought_lines).strip()
+        answer_text = '\n'.join(answer_lines).strip()
+        
+        if not thought_text:
             thought_text = full_text.strip()
+        if not answer_text:
             answer_text = full_text.strip()
 
         with get_session() as session:
@@ -679,7 +695,8 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                     token = chunk.choices[0].delta.content or ""
                     if token:
                         thought_text += token
-                        yield {"type": "stream_chunk", "content": token}
+                        if mode_clean != "act":
+                            yield {"type": "stream_chunk", "content": token}
             else:
                 choice = response.choices[0]
                 assistant_msg = choice.message
@@ -845,6 +862,8 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                 tool_name = tc.function.name
                 try:
                     tool_args = json.loads(tc.function.arguments)
+                    if isinstance(tool_args, str):
+                        tool_args = {"query": tool_args}
                 except json.JSONDecodeError:
                     tool_args = {"raw": tc.function.arguments}
 
@@ -1027,11 +1046,19 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
             return
 
     # If MAX_STEPS reached
-    timeout_answer = (
-        f"Stopping Condition Reached (Max {MAX_STEPS} Steps)\n"
-        f"The agent reached the maximum allowed reasoning steps before invoking finish. "
-        f"Here is a summary of the latest reasoning observations from the trace above."
-    )
+    if collected_observations:
+        yield {"type": "status", "content": f"Max {MAX_STEPS} steps reached. Generating fallback synthesis from observations..."}
+        fallback_summary = generate_super_summary(client, model_name, is_anthropic, collected_observations, "Max steps reached without explicit finish.", user_query)
+        if fallback_summary:
+            timeout_answer = fallback_summary
+        else:
+            timeout_answer = f"Stopping Condition Reached (Max {MAX_STEPS} Steps). Failed to generate fallback summary."
+    else:
+        timeout_answer = (
+            f"Stopping Condition Reached (Max {MAX_STEPS} Steps)\n"
+            f"The agent reached the maximum allowed reasoning steps but no observations were collected."
+        )
+
     with get_session() as session:
         step_ans = TrajectoryStep(query_id=query_id, step_number=step_num, step_type="answer", content=timeout_answer)
         session.add(step_ans)
@@ -1039,11 +1066,4 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
         if q:
             q.final_answer = timeout_answer
     yield {"type": "answer", "content": timeout_answer, "step": step_num}
-
-    # ── Generate Super Summary even on timeout ──
-    if collected_observations and mode_clean in ("react", "act"):
-        yield {"type": "status", "content": "Generating comprehensive super summary..."}
-        super_summary = generate_super_summary(client, model_name, is_anthropic, collected_observations, timeout_answer, user_query)
-        if super_summary:
-            yield {"type": "super_summary", "content": super_summary, "step": step_num + 1}
 
