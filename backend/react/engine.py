@@ -542,12 +542,18 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                 response = client.chat.completions.create(
                     model=model_name,
                     max_tokens=3000,
+                    stream=True,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_query}
                     ]
                 )
-                full_text = response.choices[0].message.content or ""
+                full_text = ""
+                for chunk in response:
+                    token = chunk.choices[0].delta.content or ""
+                    if token:
+                        full_text += token
+                        yield {"type": "stream_chunk", "content": token}
             else:
                 response = client.messages.create(
                     model=model_name,
@@ -576,12 +582,18 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                         model=model_name,
                         max_tokens=3000,
                         extra_body={"options": {"num_ctx": 4096}},
+                        stream=True,
                         messages=[
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": user_query}
                         ]
                     )
-                    full_text = response.choices[0].message.content or ""
+                    full_text = ""
+                    for chunk in response:
+                        token = chunk.choices[0].delta.content or ""
+                        if token:
+                            full_text += token
+                            yield {"type": "stream_chunk", "content": token}
                 except Exception as fallback_err:
                     clean_fallback = format_api_error(fallback_err)
                     logger.error(f"[FALLBACK ERROR - CoT Mode] {clean_fallback}", exc_info=True)
