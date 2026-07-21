@@ -26,7 +26,7 @@ export default function StepCard({ step }) {
     );
   }
 
-  if (type === 'thought' || type === 'thought_stream') {
+  if (type === 'thought') {
     return (
       <div className="step-card thought anim-fade-in">
         <div className="step-card-header">

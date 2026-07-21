@@ -570,10 +570,6 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
     anthropic_messages = [{"role": "user", "content": user_query}]
 
     while step_num <= MAX_STEPS:
-        yield {
-            "type": "status",
-            "content": f"Step {step_num}: Model is thinking and reasoning..."
-        }
         try:
             if not is_anthropic:
                 kwargs = {
@@ -584,11 +580,11 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                 
                 if is_using_fallback:
                     # ── Local Ollama Enhancements ──
-                    # 1. Optimize context window to 4096 so it runs 3x faster on local CPU/GPU hardware.
-                    kwargs["extra_body"] = {"options": {"num_ctx": 4096}}
+                    # 1. Expand context window natively so it handles multi-cycle trace history without stalling.
+                    kwargs["extra_body"] = {"options": {"num_ctx": 16384}}
                     # 2. Omit native tools schema to massively speed up prompt evaluation time.
                     # The text-based fallback parser handles the tools naturally via the system prompt text.
-                    kwargs["stream"] = True
+                    kwargs["stop"] = ["Observation", "Observation:", "\nObservation"]
                 else:
                     kwargs["tools"] = TOOL_DEFINITIONS
                     kwargs["tool_choice"] = "auto"
@@ -648,17 +644,10 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
         tool_use_blocks = []
 
         if not is_anthropic:
-            if is_using_fallback:
-                for chunk in response:
-                    token = chunk.choices[0].delta.content or ""
-                    if token:
-                        thought_text += token
-                        yield {"type": "stream_chunk", "content": token}
-            else:
-                choice = response.choices[0]
-                assistant_msg = choice.message
-                thought_text = assistant_msg.content or ""
-                tool_calls = assistant_msg.tool_calls or []
+            choice = response.choices[0]
+            assistant_msg = choice.message
+            thought_text = assistant_msg.content or ""
+            tool_calls = assistant_msg.tool_calls or []
         else:
             for block in response.content:
                 if block.type == "text":
@@ -700,12 +689,6 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                     yield {"type": "observation", "content": redirect_msg, "tool_name": "system_guard", "step": step_num}
                     step_num += 1
                     continue
-
-                # Yield tool execution status
-                yield {
-                    "type": "status",
-                    "content": f"Step {step_num}: Executing tool '{fallback_tool_name}'..."
-                }
 
                 # Repetition Guard
                 if current_signature == last_tool_signature:
@@ -820,12 +803,6 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                     step_num += 1
                     continue
 
-                # Yield tool execution status
-                yield {
-                    "type": "status",
-                    "content": f"Step {step_num}: Executing tool '{tool_name}'..."
-                }
-
                 # Repetition Guard
                 if current_signature == last_tool_signature:
                     obs_result = (
@@ -902,12 +879,6 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                     yield {"type": "observation", "content": obs_result, "tool_name": "system_guard", "step": step_num}
                     step_num += 1
                     continue
-
-                # Yield tool execution status
-                yield {
-                    "type": "status",
-                    "content": f"Step {step_num}: Executing tool '{tool_name}'..."
-                }
 
                 # Repetition Guard
                 if current_signature == last_tool_signature:
