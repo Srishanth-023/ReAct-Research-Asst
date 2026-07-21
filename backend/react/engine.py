@@ -12,6 +12,7 @@ from config import (
     FALLBACK_BASE_URL,
     FALLBACK_MODEL_NAME,
     MAX_STEPS,
+    MIN_TOOL_CALLS_BEFORE_FINISH,
 )
 from database.db import get_session
 from models.schema import Query, TrajectoryStep, Citation, Paper
@@ -182,6 +183,118 @@ def parse_text_action(text: str):
     return None, None
 
 
+def parse_papers_from_observation(tool_name: str, obs_text: str, source_query: str = "") -> list:
+    """
+    Parse structured paper data from search_arxiv or search_semantic_scholar observation text.
+    Returns a list of dicts with keys: id, title, authors, year, pdf_url, source_query, source_tool.
+    """
+    if tool_name not in ("search_arxiv", "search_semantic_scholar"):
+        return []
+    
+    papers = []
+    # Pattern: [N] ID: <id> (S2: <s2_id>)? | Year: <year>
+    #          Title: <title>
+    #          Authors: <authors>
+    #          Abstract snippet: <abstract>
+    #          PDF URL: <url> or Download Status: <status>
+    blocks = re.split(r'\n\[(\d+)\]\s*', obs_text)
+    # blocks[0] is header, then alternating: block_number, block_content
+    for i in range(1, len(blocks), 2):
+        block = blocks[i + 1] if i + 1 < len(blocks) else ""
+        paper = {"source_query": source_query, "source_tool": tool_name}
+        
+        # Extract ID
+        id_match = re.search(r'ID:\s*([^\s|]+)', block)
+        if id_match:
+            paper["id"] = id_match.group(1).strip().rstrip(')')
+        
+        # Extract S2 ID if present
+        s2_match = re.search(r'\(S2:\s*([^)]+)\)', block)
+        if s2_match:
+            paper["s2_id"] = s2_match.group(1).strip()
+        
+        # Extract Year
+        year_match = re.search(r'Year:\s*(\d{4}|Unknown)', block)
+        if year_match and year_match.group(1) != 'Unknown':
+            paper["year"] = int(year_match.group(1))
+        
+        # Extract Title
+        title_match = re.search(r'Title:\s*(.+?)(?:\n|$)', block)
+        if title_match:
+            paper["title"] = title_match.group(1).strip()
+        
+        # Extract Authors
+        authors_match = re.search(r'Authors:\s*(.+?)(?:\n|$)', block)
+        if authors_match:
+            paper["authors"] = authors_match.group(1).strip()
+        
+        # Extract Abstract
+        abstract_match = re.search(r'Abstract snippet:\s*(.+?)(?:\n|$)', block, re.DOTALL)
+        if abstract_match:
+            paper["abstract"] = abstract_match.group(1).strip().rstrip('...')
+        
+        # Extract PDF URL
+        pdf_match = re.search(r'PDF URL:\s*(http\S+)', block)
+        if pdf_match:
+            paper["pdf_url"] = pdf_match.group(1).strip()
+        
+        if paper.get("id"):
+            papers.append(paper)
+    
+    return papers
+
+
+def generate_super_summary(client, model_name, is_anthropic, observations, final_answer, user_query):
+    """
+    Make an additional LLM call to synthesize all observations and the final answer
+    into a comprehensive super summary.
+    """
+    obs_text = "\n\n---\n\n".join(
+        f"[Observation from {obs.get('tool_name', 'unknown')}]:\n{obs.get('content', '')[:1500]}"
+        for obs in observations
+    )
+    
+    synthesis_prompt = f"""You are a research synthesis assistant. The user asked: "{user_query}"
+
+An AI research agent has gathered the following observations from multiple papers and tools:
+
+{obs_text}
+
+The agent's individual answer was:
+{final_answer[:3000]}
+
+Your task: Write a comprehensive SUPER SUMMARY that synthesizes ALL the findings above into a single, cohesive, well-structured overview. This should:
+1. Identify the key themes and findings across all papers
+2. Highlight agreements and disagreements between sources
+3. Provide a unified narrative that connects all the evidence
+4. Note any gaps or areas needing further research
+
+Write in clean prose paragraphs. Use section headings as plain text on their own line (no # or ** symbols). Keep it concise but comprehensive (3-5 paragraphs)."""
+
+    try:
+        if not is_anthropic:
+            response = client.chat.completions.create(
+                model=model_name,
+                max_tokens=2000,
+                messages=[
+                    {"role": "system", "content": "You are a concise academic research synthesis assistant. Write in clean prose without markdown formatting symbols."},
+                    {"role": "user", "content": synthesis_prompt}
+                ]
+            )
+            return response.choices[0].message.content or ""
+        else:
+            response = client.messages.create(
+                model=model_name,
+                max_tokens=2000,
+                system="You are a concise academic research synthesis assistant. Write in clean prose without markdown formatting symbols.",
+                messages=[{"role": "user", "content": synthesis_prompt}]
+            )
+            return response.content[0].text if response.content else ""
+    except Exception as e:
+        logger.error(f"[Super Summary] Failed to generate: {e}")
+        return ""
+
+
 def resolve_model_name(client, model_param, is_anthropic=False, is_fallback=False):
     """
     If the model name is 'auto' or empty, query the models endpoint to select the first active model.
@@ -306,6 +419,8 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
 
     step_num = 1
     last_tool_signature = None
+    tool_call_count = 0          # Track total tool executions for premature-finish guard
+    collected_observations = []  # Collect observations for super summary generation
 
     # ── 1. Run Standard Mode (Zero-shot) ──
     if mode_clean == "standard":
@@ -455,15 +570,30 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
     anthropic_messages = [{"role": "user", "content": user_query}]
 
     while step_num <= MAX_STEPS:
+        yield {
+            "type": "status",
+            "content": f"Step {step_num}: Model is thinking and reasoning..."
+        }
         try:
             if not is_anthropic:
-                response = client.chat.completions.create(
-                    model=model_name,
-                    max_tokens=2500,
-                    messages=openai_messages,
-                    tools=TOOL_DEFINITIONS,
-                    tool_choice="auto"
-                )
+                kwargs = {
+                    "model": model_name,
+                    "max_tokens": 3500,
+                    "messages": openai_messages,
+                }
+                
+                if is_using_fallback:
+                    # ── Local Ollama Enhancements ──
+                    # 1. Optimize context window to 4096 so it runs 3x faster on local CPU/GPU hardware.
+                    kwargs["extra_body"] = {"options": {"num_ctx": 4096}}
+                    # 2. Omit native tools schema to massively speed up prompt evaluation time.
+                    # The text-based fallback parser handles the tools naturally via the system prompt text.
+                    kwargs["stream"] = True
+                else:
+                    kwargs["tools"] = TOOL_DEFINITIONS
+                    kwargs["tool_choice"] = "auto"
+                    
+                response = client.chat.completions.create(**kwargs)
             else:
                 anthropic_tools = []
                 for t in TOOL_DEFINITIONS:
@@ -475,7 +605,7 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                     })
                 response = client.messages.create(
                     model=model_name,
-                    max_tokens=2500,
+                    max_tokens=3500,
                     system=system_prompt,
                     tools=anthropic_tools,
                     messages=anthropic_messages
@@ -518,10 +648,17 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
         tool_use_blocks = []
 
         if not is_anthropic:
-            choice = response.choices[0]
-            assistant_msg = choice.message
-            thought_text = assistant_msg.content or ""
-            tool_calls = assistant_msg.tool_calls or []
+            if is_using_fallback:
+                for chunk in response:
+                    token = chunk.choices[0].delta.content or ""
+                    if token:
+                        thought_text += token
+                        yield {"type": "stream_chunk", "content": token}
+            else:
+                choice = response.choices[0]
+                assistant_msg = choice.message
+                thought_text = assistant_msg.content or ""
+                tool_calls = assistant_msg.tool_calls or []
         else:
             for block in response.content:
                 if block.type == "text":
@@ -545,6 +682,31 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                 args_json_str = json.dumps(fallback_tool_args, sort_keys=True)
                 current_signature = (fallback_tool_name, args_json_str)
 
+                # ── Premature Finish Guard ──
+                if fallback_tool_name == "finish" and tool_call_count < MIN_TOOL_CALLS_BEFORE_FINISH:
+                    logger.info(f"[Premature Finish Guard] Agent tried to finish after only {tool_call_count} tool calls (minimum: {MIN_TOOL_CALLS_BEFORE_FINISH}). Redirecting.")
+                    redirect_msg = (
+                        f"You have only executed {tool_call_count} tool calls so far. "
+                        f"This is insufficient for a comprehensive research answer. "
+                        f"You must search for more papers, fetch and index them, and retrieve context from their full text "
+                        f"before calling finish. Continue your research with more tool calls."
+                    )
+                    if not is_anthropic:
+                        openai_messages.append({"role": "assistant", "content": thought_text})
+                        openai_messages.append({"role": "user", "content": f"Observation: {redirect_msg}"})
+                    else:
+                        anthropic_messages.append({"role": "assistant", "content": thought_text})
+                        anthropic_messages.append({"role": "user", "content": f"Observation: {redirect_msg}"})
+                    yield {"type": "observation", "content": redirect_msg, "tool_name": "system_guard", "step": step_num}
+                    step_num += 1
+                    continue
+
+                # Yield tool execution status
+                yield {
+                    "type": "status",
+                    "content": f"Step {step_num}: Executing tool '{fallback_tool_name}'..."
+                }
+
                 # Repetition Guard
                 if current_signature == last_tool_signature:
                     obs_result = (
@@ -558,6 +720,8 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
 
                 if fallback_tool_name == "finish":
                     finished_answer = obs_result
+
+                tool_call_count += 1
 
                 # Record Action step
                 with get_session() as session:
@@ -573,6 +737,15 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                         session.add(step_obs)
                     yield {"type": "observation", "content": obs_result, "tool_name": fallback_tool_name, "step": step_num}
                     step_num += 1
+
+                    # Collect observation for super summary
+                    collected_observations.append({"tool_name": fallback_tool_name, "content": obs_result})
+
+                    # ── Emit papers_found for search tools ──
+                    source_query = fallback_tool_args.get("query", "")
+                    found_papers = parse_papers_from_observation(fallback_tool_name, obs_result, source_query)
+                    if found_papers:
+                        yield {"type": "papers_found", "papers": found_papers, "source_query": source_query, "step": step_num}
 
                     # Append tool result (OpenAI / Anthropic format)
                     if not is_anthropic:
@@ -591,6 +764,13 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                             q.final_answer = finished_answer
                         extract_and_record_citations(query_id, finished_answer, session)
                     yield {"type": "answer", "content": finished_answer, "step": step_num}
+
+                    # ── Generate Super Summary ──
+                    if collected_observations and mode_clean in ("react", "act"):
+                        yield {"type": "status", "content": "Generating comprehensive super summary..."}
+                        super_summary = generate_super_summary(client, model_name, is_anthropic, collected_observations, finished_answer, user_query)
+                        if super_summary:
+                            yield {"type": "super_summary", "content": super_summary, "step": step_num + 1}
                     return
 
                 continue
@@ -622,6 +802,30 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                 args_json_str = json.dumps(tool_args, sort_keys=True)
                 current_signature = (tool_name, args_json_str)
 
+                # ── Premature Finish Guard ──
+                if tool_name == "finish" and tool_call_count < MIN_TOOL_CALLS_BEFORE_FINISH:
+                    logger.info(f"[Premature Finish Guard] Agent tried to finish after only {tool_call_count} tool calls (minimum: {MIN_TOOL_CALLS_BEFORE_FINISH}). Redirecting.")
+                    obs_result = (
+                        f"You have only executed {tool_call_count} tool calls so far. "
+                        f"This is insufficient for a comprehensive research answer. "
+                        f"You must search for more papers, fetch and index them, and retrieve context from their full text "
+                        f"before calling finish. Continue your research with more tool calls."
+                    )
+                    openai_messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": obs_result
+                    })
+                    yield {"type": "observation", "content": obs_result, "tool_name": "system_guard", "step": step_num}
+                    step_num += 1
+                    continue
+
+                # Yield tool execution status
+                yield {
+                    "type": "status",
+                    "content": f"Step {step_num}: Executing tool '{tool_name}'..."
+                }
+
                 # Repetition Guard
                 if current_signature == last_tool_signature:
                     obs_result = (
@@ -635,6 +839,8 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
 
                 if tool_name == "finish":
                     finished_answer = obs_result
+
+                tool_call_count += 1
 
                 # Record Action step
                 with get_session() as session:
@@ -650,6 +856,15 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                         session.add(step_obs)
                     yield {"type": "observation", "content": obs_result, "tool_name": tool_name, "step": step_num}
                     step_num += 1
+
+                    # Collect observation for super summary
+                    collected_observations.append({"tool_name": tool_name, "content": obs_result})
+
+                    # ── Emit papers_found for search tools ──
+                    source_query = tool_args.get("query", "")
+                    found_papers = parse_papers_from_observation(tool_name, obs_result, source_query)
+                    if found_papers:
+                        yield {"type": "papers_found", "papers": found_papers, "source_query": source_query, "step": step_num}
 
                 # Append tool result (OpenAI format)
                 openai_messages.append({
@@ -670,6 +885,30 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                 args_json_str = json.dumps(tool_args, sort_keys=True)
                 current_signature = (tool_name, args_json_str)
 
+                # ── Premature Finish Guard ──
+                if tool_name == "finish" and tool_call_count < MIN_TOOL_CALLS_BEFORE_FINISH:
+                    logger.info(f"[Premature Finish Guard] Agent tried to finish after only {tool_call_count} tool calls (minimum: {MIN_TOOL_CALLS_BEFORE_FINISH}). Redirecting.")
+                    obs_result = (
+                        f"You have only executed {tool_call_count} tool calls so far. "
+                        f"This is insufficient for a comprehensive research answer. "
+                        f"You must search for more papers, fetch and index them, and retrieve context from their full text "
+                        f"before calling finish. Continue your research with more tool calls."
+                    )
+                    tool_results_content.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": obs_result
+                    })
+                    yield {"type": "observation", "content": obs_result, "tool_name": "system_guard", "step": step_num}
+                    step_num += 1
+                    continue
+
+                # Yield tool execution status
+                yield {
+                    "type": "status",
+                    "content": f"Step {step_num}: Executing tool '{tool_name}'..."
+                }
+
                 # Repetition Guard
                 if current_signature == last_tool_signature:
                     obs_result = (
@@ -683,6 +922,8 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
 
                 if tool_name == "finish":
                     finished_answer = obs_result
+
+                tool_call_count += 1
 
                 # Record Action step
                 with get_session() as session:
@@ -698,6 +939,15 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                         session.add(step_obs)
                     yield {"type": "observation", "content": obs_result, "tool_name": tool_name, "step": step_num}
                     step_num += 1
+
+                    # Collect observation for super summary
+                    collected_observations.append({"tool_name": tool_name, "content": obs_result})
+
+                    # ── Emit papers_found for search tools ──
+                    source_query = tool_args.get("query", "") if isinstance(tool_args, dict) else ""
+                    found_papers = parse_papers_from_observation(tool_name, obs_result, source_query)
+                    if found_papers:
+                        yield {"type": "papers_found", "papers": found_papers, "source_query": source_query, "step": step_num}
 
                 # Append tool result (Anthropic format)
                 tool_results_content.append({
@@ -717,12 +967,19 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
                     q.final_answer = finished_answer
                 extract_and_record_citations(query_id, finished_answer, session)
             yield {"type": "answer", "content": finished_answer, "step": step_num}
+
+            # ── Generate Super Summary ──
+            if collected_observations and mode_clean in ("react", "act"):
+                yield {"type": "status", "content": "Generating comprehensive super summary..."}
+                super_summary = generate_super_summary(client, model_name, is_anthropic, collected_observations, finished_answer, user_query)
+                if super_summary:
+                    yield {"type": "super_summary", "content": super_summary, "step": step_num + 1}
             return
 
     # If MAX_STEPS reached
     timeout_answer = (
-        f"### Stopping Condition Reached (Max {MAX_STEPS} Steps)\n"
-        f"The agent reached the maximum allowed reasoning steps before invoking `finish`. "
+        f"Stopping Condition Reached (Max {MAX_STEPS} Steps)\n"
+        f"The agent reached the maximum allowed reasoning steps before invoking finish. "
         f"Here is a summary of the latest reasoning observations from the trace above."
     )
     with get_session() as session:
@@ -732,3 +989,11 @@ def run_agent_trace(user_query: str, mode: str = "react", query_id: int = None):
         if q:
             q.final_answer = timeout_answer
     yield {"type": "answer", "content": timeout_answer, "step": step_num}
+
+    # ── Generate Super Summary even on timeout ──
+    if collected_observations and mode_clean in ("react", "act"):
+        yield {"type": "status", "content": "Generating comprehensive super summary..."}
+        super_summary = generate_super_summary(client, model_name, is_anthropic, collected_observations, timeout_answer, user_query)
+        if super_summary:
+            yield {"type": "super_summary", "content": super_summary, "step": step_num + 1}
+

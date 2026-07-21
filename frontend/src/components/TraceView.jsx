@@ -1,16 +1,17 @@
 import React, { useRef, useEffect } from 'react';
 import StepCard from './StepCard';
 import FinalAnswer from './FinalAnswer';
+import SuperSummary from './SuperSummary';
 import { Activity, Sparkles, Loader2 } from 'lucide-react';
 
-export default function TraceView({ steps, finalAnswer, isStreaming, statusMessage, onSelectPaper }) {
+export default function TraceView({ steps, finalAnswer, superSummary, isStreaming, statusMessage, onSelectPaper }) {
   const scrollRef = useRef(null);
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [steps, finalAnswer, statusMessage]);
+  }, [steps, finalAnswer, superSummary, statusMessage]);
 
   if (steps.length === 0 && !isStreaming && !finalAnswer) return null;
 
@@ -44,6 +45,7 @@ export default function TraceView({ steps, finalAnswer, isStreaming, statusMessa
       </div>
 
       {finalAnswer && <FinalAnswer answer={finalAnswer} onSelectPaper={onSelectPaper} />}
+      {superSummary && <SuperSummary summary={superSummary} />}
 
       <div ref={scrollRef} style={{ height: 24 }} />
     </div>

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Brain, Terminal, FileText, Check, Copy, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
+import MarkdownRenderer from './MarkdownRenderer';
 
 export default function StepCard({ step }) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -25,7 +26,7 @@ export default function StepCard({ step }) {
     );
   }
 
-  if (type === 'thought') {
+  if (type === 'thought' || type === 'thought_stream') {
     return (
       <div className="step-card thought anim-fade-in">
         <div className="step-card-header">
@@ -37,7 +38,7 @@ export default function StepCard({ step }) {
             {copied ? <Check size={12} style={{ color: 'var(--emerald)' }} /> : <Copy size={12} />}
           </button>
         </div>
-        <div className="step-thought-text">{content}</div>
+        <div className="step-thought-text"><MarkdownRenderer text={content} /></div>
       </div>
     );
   }

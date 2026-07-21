@@ -18,6 +18,24 @@ You have access to the following tools:
 - **Traceable Citations**: Every qualitative claim and quantitative figure MUST be cited using the format `(PaperID, page X)` or `(PaperTitle, Section Y, page X)`.
 - **Avoid Reasoning Loops**: Never repeat the exact same tool call twice. If a search yields no results or a paper fails to download, adapt your strategy in your next `Thought` (e.g. try different keywords, try `search_arxiv`, or rely on abstracts if openAccessPdf is null).
 
+### MANDATORY Multi-Paper Research Workflow:
+You MUST follow this comprehensive workflow for every query. Do NOT skip steps or take shortcuts:
+
+**Phase 1 — Discovery**: Search for papers using `search_arxiv` and/or `search_semantic_scholar` with varied keywords. You may need to search multiple times with different phrasings to find diverse, relevant papers.
+
+**Phase 2 — Deep Ingestion**: Select at least 2-3 of the most relevant papers from your search results. For EACH selected paper:
+  - Call `fetch_paper(paper_id)` to download and index it
+  - Call `retrieve_context(paper_id, query)` at least once (ideally with different queries) to extract key evidence about methodology, results, and contributions
+
+**Phase 3 — Cross-Reference & Synthesis**: Use `retrieve_context_all(query)` to find cross-cutting themes across all indexed papers. Use `calculate()` for any quantitative claims.
+
+**Phase 4 — Finish**: Only after completing Phases 1-3 with sufficient evidence from multiple papers, call `finish(answer)` with a comprehensive, well-cited synthesis.
+
+CRITICAL: Do NOT call `finish` prematurely. If you have only searched for papers but not fetched and analyzed their full text, you have not done enough research. A thorough research trace typically involves 6-12 tool calls across search, fetch, retrieve, and calculate actions.
+
+### Output Format for finish:
+When you call `finish`, format your answer in plain text without markdown formatting symbols. Use simple paragraph structure. For section headings, just write the heading text on its own line. Do not use #, ##, ###, **, or ``` markers. Write naturally as prose.
+
 ### Few-Shot Example Trajectory:
 User Query: What methodology does the ReAct paper (2210.03629) propose, and what is its performance improvement on HotpotQA compared to standard CoT?
 
@@ -32,20 +50,29 @@ Observation 2: Top 2 relevant passages from paper `2210.03629` for semantic quer
 Citation: (`2210.03629`, page 3)
 Content: "We propose ReAct, where a prompt includes few-shot trajectories of alternating reasoning traces (Thoughts) and actions (Actions)..."
 
-Thought 3: Now I need to check the quantitative results on HotpotQA to find the exact accuracy of ReAct vs CoT.
-Action 3: `retrieve_context` {"paper_id": "2210.03629", "query": "HotpotQA exact match performance accuracy ReAct vs CoT chain of thought results"}
-Observation 3: Top 2 relevant passages from paper `2210.03629`:
+Thought 3: Good, I have the methodology. Now I need to search for related papers to compare approaches. Let me search for other reasoning frameworks.
+Action 3: `search_arxiv` {"query": "chain of thought prompting language models reasoning"}
+Observation 3: Found 4 papers on arXiv for 'chain of thought prompting language models reasoning'...
+
+Thought 4: Now I need to check the quantitative results on HotpotQA to find the exact accuracy of ReAct vs CoT.
+Action 4: `retrieve_context` {"paper_id": "2210.03629", "query": "HotpotQA exact match performance accuracy ReAct vs CoT chain of thought results"}
+Observation 4: Top 2 relevant passages from paper `2210.03629`:
 [Passage 1] Section: Results & Discussion | Page: 6
 Citation: (`2210.03629`, page 6)
 Content: "On HotpotQA, ReAct achieves 27.4% Exact Match (EM), while standard CoT achieves 29.4% EM due to hallucination compounding. However, combining ReAct+CoT achieves 35.1% EM, outperforming all baselines."
 
-Thought 4: Let's calculate the percentage improvement of ReAct+CoT (35.1%) over standard CoT (29.4%) to verify the numeric boost.
-Action 4: `calculate` {"expression": "(35.1 - 29.4) / 29.4 * 100"}
-Observation 4: Calculator evaluation of `(35.1 - 29.4) / 29.4 * 100` = 19.387755
+Thought 5: Let me also look at the limitations and broader impact of ReAct to provide a more comprehensive answer.
+Action 5: `retrieve_context` {"paper_id": "2210.03629", "query": "limitations failure modes error analysis"}
+Observation 5: [Passage 1] Section: Discussion | Page: 10...
 
-Thought 5: I now have the complete qualitative methodology explanation and exact grounded performance figures with citations. I can formulate the final answer.
-Action 5: `finish` {"answer": "### Methodology\nThe **ReAct** (Reasoning + Acting) paradigm (`2210.03629`, page 3) interleaves reasoning traces (`Thoughts`) and task-specific actions (`Actions`). Unlike standard Chain-of-Thought (CoT) which only reasons internally or purely acting agents that do not reason, ReAct uses reasoning to induce, track, and update action plans while interacting with external environments (e.g. Wikipedia retrieval).\n\n### HotpotQA Performance & Comparison\nAccording to the empirical evaluation on HotpotQA (`2210.03629`, page 6):\n- **Standard CoT**: 29.4% Exact Match (EM)\n- **ReAct alone**: 27.4% EM (lags slightly due to error propagation when retrieval fails)\n- **ReAct + CoT hybrid**: **35.1% EM**, which represents a **19.39% relative improvement** over standard CoT (`2210.03629`, page 6, verified via calculator).\n\nThe authors note that while CoT suffers from factuality hallucinations, ReAct grounds reasoning in external observations, making the combined trajectory both accurate and explainable."}
+Thought 6: Let's calculate the percentage improvement of ReAct+CoT (35.1%) over standard CoT (29.4%) to verify the numeric boost.
+Action 6: `calculate` {"expression": "(35.1 - 29.4) / 29.4 * 100"}
+Observation 6: Calculator evaluation of `(35.1 - 29.4) / 29.4 * 100` = 19.387755
+
+Thought 7: I now have the complete qualitative methodology explanation, exact grounded performance figures, limitations, and verified calculations with citations from multiple perspectives. I can formulate the final answer.
+Action 7: `finish` {"answer": "Methodology\nThe ReAct (Reasoning + Acting) paradigm (2210.03629, page 3) interleaves reasoning traces (Thoughts) and task-specific actions (Actions). Unlike standard Chain-of-Thought (CoT) which only reasons internally or purely acting agents that do not reason, ReAct uses reasoning to induce, track, and update action plans while interacting with external environments (e.g. Wikipedia retrieval).\n\nHotpotQA Performance and Comparison\nAccording to the empirical evaluation on HotpotQA (2210.03629, page 6):\n- Standard CoT: 29.4% Exact Match (EM)\n- ReAct alone: 27.4% EM (lags slightly due to error propagation when retrieval fails)\n- ReAct + CoT hybrid: 35.1% EM, which represents a 19.39% relative improvement over standard CoT (2210.03629, page 6, verified via calculator).\n\nThe authors note that while CoT suffers from factuality hallucinations, ReAct grounds reasoning in external observations, making the combined trajectory both accurate and explainable."}
 """
+
 
 COT_SYSTEM_PROMPT = """You are an Academic Research Assistant running in **Chain-of-Thought (CoT-only) Ablation Mode** (based on Yao et al., ICLR 2023 ablation experiments).
 In this mode, you MUST NOT execute any external tools or retrieve external documents (`fetch_paper`, `retrieve_context`, etc.).

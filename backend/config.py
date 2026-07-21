@@ -29,7 +29,8 @@ PDF_STORAGE_DIR = os.getenv("PDF_STORAGE_DIR", str(DATA_DIR / "pdfs"))
 Path(PDF_STORAGE_DIR).mkdir(parents=True, exist_ok=True)
 
 # ReAct Agent Limits
-MAX_STEPS = 10
+MAX_STEPS = 15
+MIN_TOOL_CALLS_BEFORE_FINISH = 4  # Agent must execute at least this many tool calls before finish is allowed
 RATE_LIMIT_DELAY = 3.0  # seconds between arXiv API calls
 
 # Flask Server Configuration

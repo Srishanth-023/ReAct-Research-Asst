@@ -19,12 +19,14 @@ export default function App() {
   const [mode, setMode] = useState('react');
   const [steps, setSteps] = useState([]);
   const [finalAnswer, setFinalAnswer] = useState(null);
+  const [superSummary, setSuperSummary] = useState(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
 
   const [isSourcesOpen, setIsSourcesOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [papers, setPapers] = useState([]);
+  const [discoveredPapers, setDiscoveredPapers] = useState([]);
   const [queries, setQueries] = useState([]);
   const [selectedPaperChunks, setSelectedPaperChunks] = useState(null);
   const [isLoadingChunks, setIsLoadingChunks] = useState(false);
@@ -44,7 +46,8 @@ export default function App() {
 
   const handleSendQuery = async (queryText) => {
     if (isStreaming) return;
-    setSteps([]); setFinalAnswer(null); setIsStreaming(true);
+    setSteps([]); setFinalAnswer(null); setSuperSummary(null); setIsStreaming(true);
+    setDiscoveredPapers([]);
     setStatusMessage('Initiating academic search agent...');
 
     await streamQuery({
@@ -53,14 +56,41 @@ export default function App() {
       onEvent: (evt) => {
         if (evt.type === 'status') setStatusMessage(evt.content || 'Active...');
         else if (['thought', 'action', 'observation', 'error'].includes(evt.type)) {
-          setSteps((prev) => [...prev, evt]);
+          setSteps((prev) => {
+            if (evt.type === 'thought' && prev.length > 0 && prev[prev.length - 1].type === 'thought_stream') {
+              const newSteps = [...prev];
+              newSteps[newSteps.length - 1] = { ...newSteps[newSteps.length - 1], type: 'thought', content: evt.content };
+              return newSteps;
+            }
+            return [...prev, evt];
+          });
           if (evt.type === 'error') {
             setStatusMessage('Error encountered.');
             setIsStreaming(false);
           }
+        } else if (evt.type === 'stream_chunk') {
+          setSteps((prev) => {
+            const newSteps = [...prev];
+            const lastStep = newSteps[newSteps.length - 1];
+            if (!lastStep || lastStep.type !== 'thought_stream') {
+              newSteps.push({ type: 'thought_stream', content: evt.content });
+            } else {
+              newSteps[newSteps.length - 1] = { ...lastStep, content: lastStep.content + evt.content };
+            }
+            return newSteps;
+          });
         } else if (evt.type === 'answer') {
           setFinalAnswer(evt.content);
           setStatusMessage('Completed.');
+        } else if (evt.type === 'super_summary') {
+          setSuperSummary(evt.content);
+        } else if (evt.type === 'papers_found') {
+          // Merge discovered papers from search tool results
+          setDiscoveredPapers((prev) => {
+            const existing = new Set(prev.map(p => p.id));
+            const newPapers = (evt.papers || []).filter(p => p.id && !existing.has(p.id));
+            return [...prev, ...newPapers];
+          });
         }
       },
       onError: (err) => {
@@ -90,6 +120,7 @@ export default function App() {
       setMode(d.mode || 'react');
       setSteps(d.steps || []);
       setFinalAnswer(d.final_answer || null);
+      setSuperSummary(null);
     } catch (e) { console.warn(e); }
   };
 
@@ -99,6 +130,7 @@ export default function App() {
       await clearHistory();
       setSteps([]);
       setFinalAnswer(null);
+      setSuperSummary(null);
       await refreshHistory();
     } catch (e) {
       console.warn("Failed to clear history:", e);
@@ -116,6 +148,28 @@ export default function App() {
     }
   };
 
+  // Merge DB papers and discovered papers for the sources panel
+  const allPapers = (() => {
+    const dbIds = new Set(papers.map(p => p.id));
+    const merged = [...papers];
+    for (const dp of discoveredPapers) {
+      if (!dbIds.has(dp.id)) {
+        merged.push({
+          id: dp.id,
+          title: dp.title || dp.id,
+          authors: dp.authors ? [dp.authors] : [],
+          year: dp.year || null,
+          pdf_url: dp.pdf_url || null,
+          source_query: dp.source_query || '',
+          source_tool: dp.source_tool || '',
+          chunk_count: 0,
+          is_discovered: true, // Not yet indexed
+        });
+      }
+    }
+    return merged;
+  })();
+
   return (
     <div className="app-layout">
       <Header
@@ -124,7 +178,7 @@ export default function App() {
         onOpenHistory={() => { refreshHistory(); setIsHistoryOpen(true); }}
         onToggleSources={() => setIsSourcesOpen(!isSourcesOpen)}
         isSourcesOpen={isSourcesOpen}
-        papersCount={papers.length}
+        papersCount={allPapers.length}
       />
 
       <main className="app-main">
@@ -149,6 +203,7 @@ export default function App() {
           <TraceView
             steps={steps}
             finalAnswer={finalAnswer}
+            superSummary={superSummary}
             isStreaming={isStreaming}
             statusMessage={statusMessage}
             onSelectPaper={handleSelectPaper}
@@ -161,7 +216,7 @@ export default function App() {
       <SourcesPanel
         isOpen={isSourcesOpen}
         onClose={() => setIsSourcesOpen(false)}
-        papers={papers}
+        papers={allPapers}
         onSelectPaper={handleSelectPaper}
         selectedPaperChunks={selectedPaperChunks}
         isLoadingChunks={isLoadingChunks}

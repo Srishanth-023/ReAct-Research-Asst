@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, ExternalLink, FileText, CheckCircle, Search, Layers, Trash2 } from 'lucide-react';
+import { X, ExternalLink, FileText, CheckCircle, Search, Layers, Trash2, BookOpen } from 'lucide-react';
 
 export default function SourcesPanel({ isOpen, onClose, papers, onSelectPaper, selectedPaperChunks, isLoadingChunks, onClearPapers }) {
   const [searchQuery, setSearchQuery] = useState('');
@@ -9,8 +9,30 @@ export default function SourcesPanel({ isOpen, onClose, papers, onSelectPaper, s
 
   const filtered = (papers || []).filter(p =>
     (p.title || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (p.id || '').toLowerCase().includes(searchQuery.toLowerCase())
+    (p.id || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (p.source_query || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // Build arXiv link from paper ID
+  const getArxivLink = (paper) => {
+    const id = paper.arxiv_id || paper.id || '';
+    // Check if ID looks like an arXiv ID (e.g. 2210.03629 or cs/0001234)
+    if (/^\d{4}\.\d{4,5}(v\d+)?$/.test(id) || /^[a-z-]+\/\d+$/.test(id)) {
+      return `https://arxiv.org/abs/${id}`;
+    }
+    return null;
+  };
+
+  // Build Semantic Scholar link
+  const getS2Link = (paper) => {
+    if (paper.semantic_scholar_id) {
+      return `https://www.semanticscholar.org/paper/${paper.semantic_scholar_id}`;
+    }
+    if (paper.s2_id && paper.s2_id !== 'N/A') {
+      return `https://www.semanticscholar.org/paper/${paper.s2_id}`;
+    }
+    return null;
+  };
 
   return (
     <>
@@ -63,7 +85,7 @@ export default function SourcesPanel({ isOpen, onClose, papers, onSelectPaper, s
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search index..."
+                placeholder="Search papers or queries..."
                 className="panel-search-input"
               />
             </div>
@@ -76,7 +98,10 @@ export default function SourcesPanel({ isOpen, onClose, papers, onSelectPaper, s
             filtered.length === 0 ? (
               <div className="panel-empty">
                 <FileText size={24} style={{ opacity: 0.3, marginBottom: 6 }} />
-                <div>Index is currently empty.</div>
+                <div>No papers discovered yet.</div>
+                <div style={{ fontSize: 9, marginTop: 4, color: 'var(--text-tertiary)' }}>
+                  Papers will appear here as the agent searches.
+                </div>
               </div>
             ) : filtered.map((p) => (
               <div
@@ -86,28 +111,54 @@ export default function SourcesPanel({ isOpen, onClose, papers, onSelectPaper, s
               >
                 <div className="paper-card-top">
                   <div className="paper-title">{p.title || p.id}</div>
-                  <span className="badge badge-purple" style={{ fontSize: 9, flexShrink: 0 }}>
-                    {p.chunk_count || 0} pgs
-                  </span>
+                  <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                    {!p.is_discovered && (
+                      <span className="badge badge-emerald" style={{ fontSize: 9 }}>
+                        <CheckCircle size={8} /> Indexed
+                      </span>
+                    )}
+                    {p.is_discovered && (
+                      <span className="badge badge-amber" style={{ fontSize: 9 }}>
+                        <BookOpen size={8} /> Found
+                      </span>
+                    )}
+                  </div>
                 </div>
+
+                {/* Authors */}
                 <div className="paper-authors">
-                  {p.authors?.length > 0 ? p.authors.join(', ') : 'Authors Unknown'} ({p.year || 'n.d.'})
+                  {p.authors?.length > 0
+                    ? (Array.isArray(p.authors) ? p.authors.join(', ') : p.authors)
+                    : 'Authors Unknown'
+                  } ({p.year || 'n.d.'})
                 </div>
+
+                {/* Source query context */}
+                {p.source_query && (
+                  <div className="paper-source-query">
+                    <Search size={8} style={{ flexShrink: 0, marginTop: 1 }} />
+                    <span>Found for: "{p.source_query}"</span>
+                  </div>
+                )}
+
+                {/* Bottom: ID + Links */}
                 <div className="paper-card-bottom">
                   <span className="paper-id-tag">{p.id}</span>
                   <div className="paper-links" onClick={(e) => e.stopPropagation()}>
-                    {p.arxiv_id && (
-                      <a href={`https://arxiv.org/abs/${p.arxiv_id}`} target="_blank" rel="noopener noreferrer">
-                        Link <ExternalLink size={8} style={{ display: 'inline', marginLeft: 1 }} />
+                    {getArxivLink(p) && (
+                      <a href={getArxivLink(p)} target="_blank" rel="noopener noreferrer" className="paper-ext-link">
+                        arXiv <ExternalLink size={8} />
                       </a>
                     )}
-                    {p.pdf_path && (
-                      <span style={{ color: 'var(--emerald)', display: 'flex', alignItems: 'center', gap: 2 }}>
-                        <CheckCircle size={10} /> Indexed
-                        <a href={`http://localhost:8000/api/papers/pdf/${p.pdf_path.split(/[\\\\/]/).pop()}`} target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: '8px', color: 'var(--purple)', textDecoration: 'none' }}>
-                          PDF <ExternalLink size={8} />
-                        </a>
-                      </span>
+                    {getS2Link(p) && (
+                      <a href={getS2Link(p)} target="_blank" rel="noopener noreferrer" className="paper-ext-link">
+                        S2 <ExternalLink size={8} />
+                      </a>
+                    )}
+                    {p.pdf_url && (
+                      <a href={p.pdf_url} target="_blank" rel="noopener noreferrer" className="paper-ext-link">
+                        PDF <ExternalLink size={8} />
+                      </a>
                     )}
                   </div>
                 </div>

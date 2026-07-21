@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Sparkles, Copy, Check, ExternalLink, Award } from 'lucide-react';
+import { Sparkles, Copy, Check } from 'lucide-react';
+import MarkdownRenderer from './MarkdownRenderer';
 
 export default function FinalAnswer({ answer, onSelectPaper }) {
   const [copied, setCopied] = useState(false);
@@ -9,50 +10,6 @@ export default function FinalAnswer({ answer, onSelectPaper }) {
     navigator.clipboard.writeText(answer);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  };
-
-  const highlightCitations = (str) => {
-    const regex = /\(([`'""]?([a-zA-Z0-9.\-\/]+)[`'""]?\s*,\s*page\s*(\d+))\)/gi;
-    const parts = [];
-    let lastIdx = 0;
-    let match;
-    while ((match = regex.exec(str)) !== null) {
-      if (match.index > lastIdx) parts.push(str.substring(lastIdx, match.index));
-      const paperId = match[2];
-      const pageNum = match[3];
-      parts.push(
-        <button
-          key={`${match.index}-${paperId}`}
-          type="button"
-          onClick={() => onSelectPaper && onSelectPaper(paperId)}
-          className="citation-pill"
-          title={`Inspect paper '${paperId}' page ${pageNum}`}
-        >
-          <span>{paperId} (p.{pageNum})</span>
-          <ExternalLink size={8} />
-        </button>
-      );
-      lastIdx = regex.lastIndex;
-    }
-    if (lastIdx < str.length) parts.push(str.substring(lastIdx));
-    return parts.length > 0 ? parts : str;
-  };
-
-  const renderAnswer = (text) => {
-    return text.split('\n').map((line, i) => {
-      if (line.startsWith('### ')) return (
-        <h3 key={i} className="answer-body">
-          <Award size={12} style={{ color: 'var(--purple)', flexShrink: 0 }} />
-          {line.replace('### ', '')}
-        </h3>
-      );
-      if (line.startsWith('## ')) return <h2 key={i}>{line.replace('## ', '')}</h2>;
-      if (line.startsWith('- ') || line.startsWith('* ')) {
-        return <li key={i}>{highlightCitations(line.replace(/^[-*]\s+/, ''))}</li>;
-      }
-      if (!line.trim()) return <div key={i} style={{ height: 8 }} />;
-      return <p key={i}>{highlightCitations(line)}</p>;
-    });
   };
 
   return (
@@ -69,7 +26,9 @@ export default function FinalAnswer({ answer, onSelectPaper }) {
           {copied ? <><Check size={12} style={{ color: 'var(--emerald)' }} /> Copied</> : <><Copy size={12} /> Copy</>}
         </button>
       </div>
-      <div className="answer-body">{renderAnswer(answer)}</div>
+      <div className="answer-body">
+        <MarkdownRenderer text={answer} onSelectPaper={onSelectPaper} />
+      </div>
     </div>
   );
 }
